@@ -30,6 +30,7 @@ facebook_group_refresh/
 ├─ docs/
 │  ├─ V1_SPEC.md
 │  ├─ REFACTOR_PLAN.md
+│  ├─ STATE_REFACTOR_PLAN.md
 │  ├─ SCRIPT_TEMPLATE_GUIDE.md
 │  └─ TASK_BREAKDOWN.md
 ├─ AGENTS.md
@@ -49,6 +50,8 @@ facebook_group_refresh/
   功能規格與設計方向。
 - `docs/REFACTOR_PLAN.md`
   重構盤點、完成項目與後續原則。
+- `docs/STATE_REFACTOR_PLAN.md`
+  `STATE` 專題重構計畫，記錄 runtime 分區、mutation 入口與五輪重構步驟。
 - `docs/SCRIPT_TEMPLATE_GUIDE.md`
   說明如何把這份腳本作為其他單站監視腳本模板。
 - `docs/TASK_BREAKDOWN.md`
@@ -102,7 +105,7 @@ https://www.facebook.com/groups/<group-id>/
 - `儲存`
   儲存包含與排除關鍵字。在監控中按下後會依新規則重新掃描。
 - `開始 / 暫停`
-  切換監控狀態。從暫停切回開始時，會清除目前社團的已看過貼文記錄並立即重新掃描。
+  切換監控狀態。從暫停切回開始時，按鈕語義屬於「重新開始目前社團監控」，會清除目前社團的已看過貼文記錄並立即重新掃描，而不是單純沿用舊基準恢復排程。
 - `查看紀錄`
   查看最近符合關鍵字且已通知的全域紀錄，也可以清空全部通知紀錄。
 - `設定`
@@ -143,6 +146,8 @@ https://www.facebook.com/groups/<group-id>/
 - `排除關鍵字`: `徵`
 
 預設狀態為 `已暫停`。你需要手動按下 `開始` 才會進入監控。
+
+目前 `seenPosts` 的去重基準只保留「當前社團」資料；切換到其他社團後，腳本會以該社團自己的狀態重新建立去重基準，而不保留多社團的長期 seen bucket。
 
 ## 設定說明
 
@@ -257,6 +262,7 @@ https://www.facebook.com/groups/<group-id>/
 
 - [`docs/V1_SPEC.md`](./docs/V1_SPEC.md)
 - [`docs/REFACTOR_PLAN.md`](./docs/REFACTOR_PLAN.md)
+- [`docs/STATE_REFACTOR_PLAN.md`](./docs/STATE_REFACTOR_PLAN.md)
 - [`docs/SCRIPT_TEMPLATE_GUIDE.md`](./docs/SCRIPT_TEMPLATE_GUIDE.md)
 - [`docs/TASK_BREAKDOWN.md`](./docs/TASK_BREAKDOWN.md)
 
@@ -269,6 +275,8 @@ https://www.facebook.com/groups/<group-id>/
 ```powershell
 & 'C:\Program Files\nodejs\node.exe' '.\scripts\smoke_check_userscript.js'
 ```
+
+目前 smoke test 已涵蓋 userscript metadata、keyword matcher / dedupe / notification formatting、`開始 / 暫停` 的 restart 語義、top-post shortcut eligibility、refresh payload builder，以及 scan / notification runtime 的純邏輯 helper。
 
 這個檢查主要會驗證：
 

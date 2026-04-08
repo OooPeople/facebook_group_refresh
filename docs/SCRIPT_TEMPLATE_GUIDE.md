@@ -245,6 +245,12 @@
 - `__FB_GROUP_REFRESH_TEST_HOOKS__`
 - Node `vm` 載入 userscript 的方式
 
+目前這份模板也已驗證一種可直接沿用的 runtime 結構：
+
+- `STATE` 先分成 `config / scanRuntime / notificationRuntime / routeRuntime / uiRuntime / schedulerRuntime / sessionRuntime`
+- 各 runtime 的寫入優先走分類明確的 patch helper
+- timer / observer / panel runtime 以 orchestration helper 統一收口
+
 這是這份模板很重要的部分，因為它讓：
 
 - 單檔 userscript
@@ -763,3 +769,79 @@ Facebook 目前有：
 ## 16. 一句話總結
 
 未來做新網站監視腳本時，應該複製這份腳本的「分層方式與資料流」，而不是複製 Facebook 本身的 selector 與語意。
+
+---
+
+## 17. 哪些 policy 可直接沿用，哪些屬於 Facebook 專屬
+
+這份模板的價值不只在函式切分，也在於某些 policy 已經被整理成可複製的模式。實際複製到新腳本時，應先分清楚「通用 policy」與「Facebook 專屬 policy」。
+
+### 17.1 適合直接沿用的 policy
+
+以下做法通常可直接沿用到新網站腳本，只需改欄位名稱與通知文字：
+
+- include / exclude 關鍵字規則
+- dedupe key 的分層策略
+  - 優先穩定 ID
+  - 次選 permalink
+  - 最後才用作者 / 時間 / 文字簽名 fallback
+- seen / history / latest notification 的持久化思路
+- panel / settings / debug / history modal 的互動分層
+- smoke test 只測純邏輯與 policy，不硬測 DOM-heavy 行為
+- notifier 分成本地通知與 opt-in 遠端通知通道
+
+### 17.2 屬於 Facebook 專屬、通常必須重寫的 policy
+
+以下內容高度依賴 Facebook 社團頁的 DOM 與互動節奏，新腳本通常不能直接搬：
+
+- page detection 與 context 命名
+  - `groupId`
+  - `groupName`
+- feed sort 判斷
+  - `新貼文`
+  - `最相關`
+  - `最新動態`
+- top-post shortcut 的前提
+  - 依賴目前頁面確實是時間排序
+  - 依賴最上方貼文足以作為快篩基準
+- seen-stop 提前停止深掃
+  - 依賴貼文列表由新到舊的排序可信度
+  - 依賴 scroll / load-more 的頁面節奏
+- Facebook 專屬 DOM heuristic
+  - 貼文容器辨識
+  - `查看更多 / See more`
+  - post ID 抽取
+  - 群組名稱抓取與導覽 label 排除
+
+### 17.3 複製到新腳本時的判斷原則
+
+如果某個規則同時依賴以下兩件事，就應優先視為站點專屬：
+
+1. 依賴網站 DOM 結構、按鈕文案、頁籤名稱或排序模式
+2. 依賴該網站的載入節奏，例如 scroll 後何時補資料、最上方資料是否可信
+
+如果某個規則主要是在回答以下問題，通常可視為可複製的通用 policy：
+
+1. 如何定義命中條件
+2. 如何定義 dedupe
+3. 如何保存已通知歷史
+4. 如何把 UI / notifier / scan orchestration 分層
+
+### 17.4 一個實用的複製順序
+
+當你從這份模板開新腳本時，建議順序是：
+
+1. 先保留通用 policy 不動
+   - matcher
+   - dedupe
+   - history
+   - notifier
+   - smoke test 骨架
+2. 再重寫站點專屬 policy
+   - page detection
+   - extractor
+   - top-post shortcut 是否存在
+   - seen-stop 是否合理
+3. 最後才調整 UI 文字與通知內容
+
+這樣做的好處是，新腳本會先站穩資料流與分層，再處理網站差異，而不是一開始就把所有東西一起改亂。

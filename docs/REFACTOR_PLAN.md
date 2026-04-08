@@ -136,6 +136,7 @@
 - `commitScanState()` 也開始把「通知新命中」、「寫入歷史」、「補標全量 seen」與「取回最新 seen map」拆開，成功收尾階段的責任比前一階段更單純。
 - 單篇貼文的 summary 建立與是否進通知佇列的判斷也開始有固定入口，matcher / scan 的邊界比前一階段更清楚。
 - `parseKeywordInput()`、`matchRules()`、`getPostKey()`、`dedupeExtractedPosts()`、通知文字格式化等穩定邏輯也開始共用更小的 helper，後續補 Node 級檢查時切入點更直接。
+- smoke test 目前也已開始覆蓋控制語義與 policy 層，例如 `開始 / 暫停` 的 restart 語義、top-post shortcut eligibility，以及 refresh 設定 payload 的欄位對齊與裁切。
 - selector / extractor 的固定規則開始從函式內硬編碼轉成集中常數，後續要檢查或調整 DOM 規則時比較容易盤點。
 - extractor 內 selector 走訪、文字片段收集與 regex 命中順序也開始有共用入口，後續若要補更多 DOM 變體，變更點更集中。
 - `collectPostsAcrossWindows()` 已比較接近 orchestration shell，視窗收集、累積去重、停止條件與 load-more 動作各自有獨立入口。
@@ -146,6 +147,7 @@
 - `latestNotification` 已開始同時具備 runtime state 與 persistence facade，通知狀態的更新路徑更集中。
 - 單檔模組區塊整理這件事已經從「規劃中的命名整理」進展到實際可讀的分段結構，不再只是停留在假模組化命名層。
 - 穩定純邏輯也已有最小 Node 級 smoke test 可驗，後續若補更多測試案例，可以直接延伸現有基礎。
+- `STATE` 的後續收口已另立 [`docs/STATE_REFACTOR_PLAN.md`](./STATE_REFACTOR_PLAN.md)，避免把主重構盤點與 state 專題重構混在同一份文件裡。
 
 ### 2. lifecycle 與 scheduler 的入口已收斂
 
@@ -396,3 +398,24 @@
   - 只在實際出現卡頓、閃動或輸入干擾時，才進一步縮小 panel 重刷範圍
 
 總結來說，`chatgpt_review.md` 所指出的核心結構問題，目前已大致落地；尚未完成的部分，多半不是漏做，而是評估後認為再往下做會開始進入過度工程。
+
+## 與 chatgpt_review2 對照結論
+
+重新對照 `chatgpt_review2.md` 後，結論如下：
+
+- review2 中仍然合理、而且值得持續注意的部分：
+  - `STATE` 仍偏胖，雖然已從結構風險降到可接受的單檔 userscript 取捨，但後續新增功能時仍要避免再次擴散寫入點
+  - `開始 / 暫停` 的語義不能只當成 UI toggle，必須明確區分 pause 與 restart；目前已開始朝這個方向收口
+  - `seenPosts` 目前只保留當前社團 bucket，這是刻意設計，不是 accidental drift，但文件需要明寫其 tradeoff
+  - maintenance loop 屬於 Facebook SPA 下的現實折衷，應視為 policy 層選擇，而不是隨機散落的 workaround
+  - smoke test 應逐步從 matcher 擴大到控制語義與 policy 層，避免未來重構只剩人工回歸
+- review2 中部分合理，但優先度已下降的部分：
+  - `FEATURE_STATUS` 與 `loadMoreMode` 確實仍有「保留能力 / 內部預留點」的痕跡，但目前已是刻意縮小正式能力面的做法，不再視為急修項
+  - config persistence 在早期版本確實較分裂；目前已透過 refresh payload 與 store facade 收斂，不再需要為此再開一輪大重構
+  - Facebook DOM 依賴點可以再文件化，但不建議再抽成更高一層抽象模型，避免為了名稱而名稱
+- review2 中目前不建議照單全收的部分：
+  - 不做全面 `STATE` facade 化；在單檔 Tampermonkey 腳本中，這很容易只增加 wrapper 而不明顯降低複雜度
+  - 不做更高一層的 `facebookDomProfile` / `groupPageDetectionContract` 類抽象；目前單站腳本還不需要這種額外名詞層
+  - 不做 scheduler framework 化；現況的 scan / refresh / route / render 排程複雜度仍可由既有分段支撐
+
+總結來說，`chatgpt_review2.md` 比較像是第二輪整理的提醒清單，而不是新的大重構藍圖。其高價值部分已被納入後續優化方向，剩餘未採納部分多半是為了避免過度工程。

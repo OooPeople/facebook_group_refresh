@@ -128,6 +128,73 @@ function loadTestHooks() {
 }
 
 function runTests(hooks) {
+  assert(
+    hooks.getPauseToggleAction(true) === "restart",
+    "Expected paused state to map to restart semantics."
+  );
+  assert(
+    hooks.getPauseToggleAction(false) === "pause",
+    "Expected active state to map to pause semantics."
+  );
+  assert(
+    hooks.shouldUseTopPostShortcut("mutation") === true,
+    "Expected routine mutation scans to allow the top-post shortcut."
+  );
+  assert(
+    hooks.shouldUseTopPostShortcut("manual-start") === false,
+    "Expected manual-start scans to bypass the top-post shortcut."
+  );
+  assert(
+    hooks.shouldUseTopPostShortcut("save") === false,
+    "Expected save-triggered scans to bypass the top-post shortcut."
+  );
+  assert(
+    hooks.shouldUseTopPostShortcut("route-change") === false,
+    "Expected route-change scans to bypass the top-post shortcut."
+  );
+  assert(
+    JSON.stringify(hooks.buildFailedScanRuntimeState(new Error("boom"))) ===
+      JSON.stringify({ latestError: "boom" }),
+    "Expected failed scan runtime builder to normalize the error message."
+  );
+  assert(
+    JSON.stringify(
+      hooks.buildCompletedNotificationState(
+        { title: "t", status: "pending" },
+        ["gm_sent", "ntfy_sent"]
+      )
+    ) === JSON.stringify({ title: "t", status: "gm_sent, ntfy_sent" }),
+    "Expected completed notification builder to join status parts."
+  );
+  assert(
+    hooks.getLatestNotificationStatusLabel({ status: "discord_sent" }) === "discord_sent",
+    "Expected latest notification status helper to surface the stored status."
+  );
+  assert(
+    hooks.getLatestNotificationStatusLabel(null) === "(本次無)",
+    "Expected latest notification status helper to provide an empty fallback."
+  );
+
+  const refreshPayload = hooks.buildRefreshSettingsPayloadFromConfig({
+    minRefreshSec: 15,
+    maxRefreshSec: 45,
+    jitterEnabled: true,
+    fixedRefreshSec: 90,
+    maxPostsPerScan: 99,
+    autoLoadMorePosts: false,
+  });
+  assert(
+    JSON.stringify(refreshPayload) === JSON.stringify({
+      min: 15,
+      max: 45,
+      jitterEnabled: true,
+      fixedSec: 90,
+      maxPostsPerScan: 10,
+      autoLoadMorePosts: false,
+    }),
+    "Expected refresh payload builder to normalize and clamp config values."
+  );
+
   const parsedRules = hooks.parseKeywordInput(" 搖滾 6880 ; 搖滾 5880 ; ");
   assert(parsedRules.length === 2, "Expected two parsed keyword rules.");
   assert(parsedRules[0].raw === "搖滾 6880", "Unexpected first keyword rule.");

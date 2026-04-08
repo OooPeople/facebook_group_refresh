@@ -224,24 +224,128 @@
 
   const STATE = {
     config: loadConfig(),
-    initializedGroups: new Set(),
-    latestScan: null,
-    latestPosts: [],
-    latestError: "",
-    latestNotification: getLatestNotificationStore(),
-    observer: null,
-    scanTimer: null,
-    refreshTimer: null,
-    refreshDeadline: null,
-    routeTimer: null,
-    renderTimer: null,
-    lastUrl: location.href,
-    lastRouteChangeAt: 0,
-    lastRouteGroupId: getCurrentGroupId(),
-    panelMounted: false,
-    isScanning: false,
-    isLoadingMorePosts: false,
+    scanRuntime: {
+      latestScan: null,
+      latestPosts: [],
+      latestError: "",
+      isScanning: false,
+      isLoadingMorePosts: false,
+    },
+    notificationRuntime: {
+      latestNotification: getLatestNotificationStore(),
+    },
+    routeRuntime: {
+      lastUrl: location.href,
+      lastRouteChangeAt: 0,
+      lastRouteGroupId: getCurrentGroupId(),
+    },
+    uiRuntime: {
+      panelMounted: false,
+    },
+    schedulerRuntime: {
+      observer: null,
+      scanTimer: null,
+      refreshTimer: null,
+      refreshDeadline: null,
+      routeTimer: null,
+      renderTimer: null,
+    },
+    sessionRuntime: {
+      initializedGroups: new Set(),
+    },
   };
+
+  // ==========================================================================
+  // State Mutation
+  // ==========================================================================
+
+  // 以分類明確的 patch helper 更新執行期狀態，避免不同區塊直接散寫 STATE。
+  function setConfigPatch(patch) {
+    Object.assign(STATE.config, patch || {});
+  }
+
+  function setScanRuntimePatch(patch) {
+    Object.assign(STATE.scanRuntime, patch || {});
+  }
+
+  function setNotificationRuntimePatch(patch) {
+    Object.assign(STATE.notificationRuntime, patch || {});
+  }
+
+  function setRouteRuntimePatch(patch) {
+    Object.assign(STATE.routeRuntime, patch || {});
+  }
+
+  function setUiRuntimePatch(patch) {
+    Object.assign(STATE.uiRuntime, patch || {});
+  }
+
+  function setSchedulerRuntimePatch(patch) {
+    Object.assign(STATE.schedulerRuntime, patch || {});
+  }
+
+  function setSessionRuntimePatch(patch) {
+    Object.assign(STATE.sessionRuntime, patch || {});
+  }
+
+  // 建立統一的 scan runtime reset patch，供 route-change 與其他收尾路徑共用。
+  function buildResetScanRuntimeState() {
+    return {
+      latestPosts: [],
+      latestScan: null,
+      latestError: "",
+    };
+  }
+
+  // 建立掃描失敗時的 scan runtime patch。
+  function buildFailedScanRuntimeState(error) {
+    return {
+      latestError: String(error && error.message ? error.message : error),
+    };
+  }
+
+  // 套用 scan runtime patch，讓 orchestration 層只處理意圖，不散寫欄位。
+  function applyScanRuntimeState(runtimeState) {
+    setScanRuntimePatch(runtimeState || {});
+  }
+
+  // 建立通知完成後的 latestNotification 狀態。
+  function buildCompletedNotificationState(latestNotification, statusParts) {
+    if (!latestNotification || typeof latestNotification !== "object") {
+      return null;
+    }
+
+    return {
+      ...latestNotification,
+      status: statusParts.length ? statusParts.join(", ") : "no_channel_sent",
+    };
+  }
+
+  // 將 latestNotification 狀態轉成 panel/debug 顯示文字。
+  function getLatestNotificationStatusLabel(latestNotification) {
+    return latestNotification?.status || "(本次無)";
+  }
+
+  // 集中整理 panel 需要的 runtime snapshot，避免 view builder 散讀 STATE。
+  function buildPanelRuntimeSnapshot() {
+    return {
+      latestScan: STATE.scanRuntime.latestScan,
+      latestPosts: STATE.scanRuntime.latestPosts,
+      latestError: STATE.scanRuntime.latestError,
+      latestNotification: STATE.notificationRuntime.latestNotification,
+    };
+  }
+
+  // 取得目前主面板 DOM；集中 panel element 查找。
+  function getPanelElement() {
+    const panel = document.getElementById("fb-group-refresh-panel");
+    return panel instanceof HTMLElement ? panel : null;
+  }
+
+  // 同步 panel mounted runtime flag。
+  function setPanelMountedState(panelMounted) {
+    setUiRuntimePatch({ panelMounted: Boolean(panelMounted) });
+  }
 
   // ==========================================================================
   // Storage / Config
@@ -266,15 +370,20 @@
   }
 
   // 組出 refresh 設定的持久化 payload，避免讀寫欄位各自漂移。
-  function buildRefreshSettingsPayload() {
+  function buildRefreshSettingsPayloadFromConfig(config) {
     return {
-      min: STATE.config.minRefreshSec,
-      max: STATE.config.maxRefreshSec,
-      jitterEnabled: STATE.config.jitterEnabled,
-      fixedSec: STATE.config.fixedRefreshSec,
-      maxPostsPerScan: clampTargetPostCount(STATE.config.maxPostsPerScan),
-      autoLoadMorePosts: STATE.config.autoLoadMorePosts,
+      min: config.minRefreshSec,
+      max: config.maxRefreshSec,
+      jitterEnabled: config.jitterEnabled,
+      fixedSec: config.fixedRefreshSec,
+      maxPostsPerScan: clampTargetPostCount(config.maxPostsPerScan),
+      autoLoadMorePosts: config.autoLoadMorePosts,
     };
+  }
+
+  // 組出 refresh 設定的持久化 payload，避免讀寫欄位各自漂移。
+  function buildRefreshSettingsPayload() {
+    return buildRefreshSettingsPayloadFromConfig(STATE.config);
   }
 
   // 從持久化儲存讀回目前設定，並將舊格式 refreshRange 合併回執行設定。
@@ -306,7 +415,7 @@
   // 保存 ntfy topic；空字串時直接移除設定。
   function saveNtfyTopicSetting(value) {
     const topic = normalizeText(value);
-    STATE.config.ntfyTopic = topic;
+    setConfigPatch({ ntfyTopic: topic });
 
     if (topic) {
       saveString(STORAGE_KEYS.ntfyTopic, topic);
@@ -323,7 +432,7 @@
   // 保存 Discord Webhook URL；空字串時直接移除設定。
   function saveDiscordWebhookSetting(value) {
     const webhook = normalizeText(value);
-    STATE.config.discordWebhook = webhook;
+    setConfigPatch({ discordWebhook: webhook });
 
     if (webhook) {
       saveString(STORAGE_KEYS.discordWebhook, webhook);
@@ -871,33 +980,90 @@
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
+  // 將 refresh timer 與 deadline 一起寫入 scheduler runtime。
+  function setRefreshScheduleState(refreshTimer, refreshDeadline) {
+    setSchedulerRuntimePatch({
+      refreshTimer,
+      refreshDeadline,
+    });
+  }
+
+  // 將 scan debounce timer 寫入 scheduler runtime。
+  function setScanScheduleState(scanTimer) {
+    setSchedulerRuntimePatch({ scanTimer });
+  }
+
+  // 安裝目前使用的 feed observer handle。
+  function setFeedObserverState(observer) {
+    setSchedulerRuntimePatch({ observer });
+  }
+
+  // 寫入 route / render maintenance loop handles。
+  function setMaintenanceLoopState(routeTimer, renderTimer) {
+    setSchedulerRuntimePatch({
+      routeTimer,
+      renderTimer,
+    });
+  }
+
+  // 清掉目前使用的 feed observer handle。
+  function clearFeedObserverState() {
+    setFeedObserverState(null);
+  }
+
+  // 斷開目前的 feed observer，集中 observer 清理邏輯。
+  function disconnectFeedObserver() {
+    if (!STATE.schedulerRuntime.observer) return;
+
+    STATE.schedulerRuntime.observer.disconnect();
+    clearFeedObserverState();
+  }
+
   // 安排下一次頁面刷新；暫停或不在群組頁時不啟動。
   function scheduleRefresh() {
     clearRefreshTimer();
     if (STATE.config.paused || !isSupportedGroupPage()) return;
 
     const delaySec = getRefreshSeconds();
-    STATE.refreshDeadline = Date.now() + delaySec * 1000;
-    STATE.refreshTimer = window.setTimeout(() => {
+    const refreshDeadline = Date.now() + delaySec * 1000;
+    const refreshTimer = window.setTimeout(() => {
       location.reload();
     }, delaySec * 1000);
+    setRefreshScheduleState(refreshTimer, refreshDeadline);
   }
 
   // 清掉已排程的刷新計時器與截止時間。
   function clearRefreshTimer() {
-    if (STATE.refreshTimer) {
-      clearTimeout(STATE.refreshTimer);
-      STATE.refreshTimer = null;
+    if (STATE.schedulerRuntime.refreshTimer) {
+      clearTimeout(STATE.schedulerRuntime.refreshTimer);
     }
-    STATE.refreshDeadline = null;
+    setRefreshScheduleState(null, null);
   }
 
   // 清掉待執行的掃描計時器，避免多個 debounce timer 重疊。
   function clearScanTimer() {
-    if (!STATE.scanTimer) return;
+    if (!STATE.schedulerRuntime.scanTimer) return;
 
-    clearTimeout(STATE.scanTimer);
-    STATE.scanTimer = null;
+    clearTimeout(STATE.schedulerRuntime.scanTimer);
+    setScanScheduleState(null);
+  }
+
+  // 清掉目前監控流程會用到的排程 timer。
+  function clearMonitoringScheduleTimers() {
+    clearRefreshTimer();
+    clearScanTimer();
+  }
+
+  // 清掉 route / render maintenance loops，避免重複安裝 interval。
+  function clearMaintenanceLoops() {
+    if (STATE.schedulerRuntime.routeTimer) {
+      clearInterval(STATE.schedulerRuntime.routeTimer);
+    }
+    if (STATE.schedulerRuntime.renderTimer) {
+      clearInterval(STATE.schedulerRuntime.renderTimer);
+    }
+
+    setMaintenanceLoopState(null, null);
   }
 
   // 透過單一入口觸發主面板重繪，讓生命週期與 UI 收尾點更集中。
@@ -913,7 +1079,7 @@
 
   // 以 debounce 方式安排掃描，並在 route 剛切換時多等一段穩定時間。
   function scheduleScan(reason) {
-    if (STATE.config.paused || STATE.isLoadingMorePosts || STATE.isScanning) return;
+    if (STATE.config.paused || STATE.scanRuntime.isLoadingMorePosts || STATE.scanRuntime.isScanning) return;
     if (!isSupportedGroupPage()) {
       requestPanelRender();
       return;
@@ -924,18 +1090,18 @@
     const delayMs = Math.max(baseDelayMs, routeSettleRemainingMs);
 
     clearScanTimer();
-    STATE.scanTimer = window.setTimeout(() => {
-      STATE.scanTimer = null;
+    setScanScheduleState(window.setTimeout(() => {
+      setScanScheduleState(null);
       runScan(reason);
-    }, delayMs);
+    }, delayMs));
   }
 
   // Facebook SPA route 剛變更時先等待 DOM 穩定，降低抓到半套畫面的機率。
   function getRecentRouteSettleRemainingMs() {
-    if (!STATE.lastRouteChangeAt) return 0;
-    if (STATE.lastRouteGroupId !== getCurrentGroupId()) return 0;
+    if (!STATE.routeRuntime.lastRouteChangeAt) return 0;
+    if (STATE.routeRuntime.lastRouteGroupId !== getCurrentGroupId()) return 0;
 
-    const elapsedMs = Date.now() - STATE.lastRouteChangeAt;
+    const elapsedMs = Date.now() - STATE.routeRuntime.lastRouteChangeAt;
     return Math.max(0, ROUTE_SETTLE_MS - elapsedMs);
   }
 
@@ -1964,16 +2130,18 @@
   // 更新執行期 latestNotification，必要時同步持久化。
   function setLatestNotificationState(notification, options = {}) {
     const { persist = false } = options;
-    STATE.latestNotification = notification && typeof notification === "object" ? notification : null;
+    setNotificationRuntimePatch({
+      latestNotification: notification && typeof notification === "object" ? notification : null,
+    });
     if (persist) {
-      setLatestNotificationStore(STATE.latestNotification);
+      setLatestNotificationStore(STATE.notificationRuntime.latestNotification);
     }
   }
 
   // 清空執行期 latestNotification，必要時同步清掉持久化值。
   function clearLatestNotificationState(options = {}) {
     const { persist = false } = options;
-    STATE.latestNotification = null;
+    setNotificationRuntimePatch({ latestNotification: null });
     if (persist) {
       setLatestNotificationStore(null);
     }
@@ -2435,12 +2603,12 @@
     result.afterCount = initialCandidates.length;
 
     // 若其他掃描流程正在載入更多貼文，這輪只吃當前視窗，避免互相打架。
-    if (STATE.isLoadingMorePosts) {
+    if (STATE.scanRuntime.isLoadingMorePosts) {
       return collectCurrentWindowOnlyResult(context, initialCandidates);
     }
 
     const startY = window.scrollY;
-    STATE.isLoadingMorePosts = true;
+    setScanRuntimePatch({ isLoadingMorePosts: true });
 
     try {
       for (let windowIndex = 0; windowIndex < maxWindows; windowIndex += 1) {
@@ -2490,7 +2658,7 @@
       // 掃描結束後把視窗捲回原位，避免干擾使用者閱讀。
       window.scrollTo(0, startY);
       await sleep(160);
-      STATE.isLoadingMorePosts = false;
+      setScanRuntimePatch({ isLoadingMorePosts: false });
     }
 
     return finalizeWindowCollectionResult(context);
@@ -2866,7 +3034,7 @@
       includeRules: parseKeywordInput(STATE.config.includeKeywords),
       excludeRules: parseKeywordInput(STATE.config.excludeKeywords),
       // 每個群組第一次掃描只建立 baseline，不對既有貼文發通知。
-      baselineMode: !STATE.initializedGroups.has(groupId),
+      baselineMode: !STATE.sessionRuntime.initializedGroups.has(groupId),
     };
   }
 
@@ -2895,7 +3063,7 @@
   // baseline 群組只需要在成功完成本輪掃描後註記一次。
   function markGroupInitializedAfterScan(groupId, baselineMode) {
     if (baselineMode) {
-      STATE.initializedGroups.add(groupId);
+      STATE.sessionRuntime.initializedGroups.add(groupId);
     }
   }
 
@@ -2918,17 +3086,19 @@
 
   // 套用成功掃描後的 runtime state，讓 runScan() 保持在 orchestration 層。
   function applySuccessfulScanRuntimeState(runtimeState) {
-    STATE.latestPosts = runtimeState.latestPosts;
-    STATE.latestScan = runtimeState.latestScan;
+    applyScanRuntimeState({
+      latestPosts: runtimeState.latestPosts,
+      latestScan: runtimeState.latestScan,
+      latestError: "",
+    });
     if (runtimeState.clearLatestNotification) {
       clearLatestNotificationState();
     }
-    STATE.latestError = "";
   }
 
   // 單輪掃描失敗時的共用收尾。
   function handleScanFailure(error) {
-    STATE.latestError = String(error && error.message ? error.message : error);
+    applyScanRuntimeState(buildFailedScanRuntimeState(error));
     console.error("[fb-group-refresh] scan failed", error);
   }
 
@@ -2939,9 +3109,9 @@
       requestPanelRender();
       return;
     }
-    if (STATE.isScanning) return;
+    if (STATE.scanRuntime.isScanning) return;
 
-    STATE.isScanning = true;
+    setScanRuntimePatch({ isScanning: true });
 
     try {
       const scanContext = createScanExecutionContext(reason);
@@ -2959,7 +3129,7 @@
     } catch (error) {
       handleScanFailure(error);
     } finally {
-      STATE.isScanning = false;
+      setScanRuntimePatch({ isScanning: false });
       rescheduleRefreshAndRender();
     }
   }
@@ -3039,7 +3209,7 @@
   // 透過 ntfy topic 傳送遠端通知；未設定 topic 時直接跳過。
   function sendNtfyNotification({ title, body, clickUrl }) {
     const topic = getPersistedNtfyTopic();
-    STATE.config.ntfyTopic = topic;
+    setConfigPatch({ ntfyTopic: topic });
     if (!topic) {
       return Promise.resolve("ntfy_skipped");
     }
@@ -3076,7 +3246,7 @@
   // 透過 Discord Webhook 傳送遠端通知；未設定 URL 時直接跳過。
   function sendDiscordWebhookNotification({ title, body, clickUrl }) {
     const webhook = getPersistedDiscordWebhook();
-    STATE.config.discordWebhook = webhook;
+    setConfigPatch({ discordWebhook: webhook });
     if (!webhook) {
       return Promise.resolve("discord_skipped");
     }
@@ -3119,10 +3289,13 @@
 
   // 更新 latestNotification 的最終狀態並持久化。
   function finalizeLatestNotification(statusParts) {
-    if (!STATE.latestNotification) return;
+    const latestNotification = buildCompletedNotificationState(
+      STATE.notificationRuntime.latestNotification,
+      statusParts
+    );
+    if (!latestNotification) return;
 
-    STATE.latestNotification.status = statusParts.length ? statusParts.join(", ") : "no_channel_sent";
-    setLatestNotificationStore(STATE.latestNotification);
+    setLatestNotificationState(latestNotification, { persist: true });
   }
 
   // 建立本輪通知內容與標題，供各通知通道共用。
@@ -3543,15 +3716,17 @@
   function applySettingsModalDraft(draft) {
     if (!draft) return;
 
-    STATE.config.jitterEnabled = draft.jitterEnabled;
-    STATE.config.ntfyTopic = draft.ntfyTopic;
-    STATE.config.discordWebhook = draft.discordWebhook;
-    STATE.config.autoLoadMorePosts = draft.autoLoadMorePosts;
-    STATE.config.loadMoreMode = DEFAULT_CONFIG.loadMoreMode;
-    STATE.config.minRefreshSec = draft.minRefreshSec;
-    STATE.config.maxRefreshSec = draft.maxRefreshSec;
-    STATE.config.fixedRefreshSec = draft.fixedRefreshSec;
-    STATE.config.maxPostsPerScan = draft.maxPostsPerScan;
+    setConfigPatch({
+      jitterEnabled: draft.jitterEnabled,
+      ntfyTopic: draft.ntfyTopic,
+      discordWebhook: draft.discordWebhook,
+      autoLoadMorePosts: draft.autoLoadMorePosts,
+      loadMoreMode: DEFAULT_CONFIG.loadMoreMode,
+      minRefreshSec: draft.minRefreshSec,
+      maxRefreshSec: draft.maxRefreshSec,
+      fixedRefreshSec: draft.fixedRefreshSec,
+      maxPostsPerScan: draft.maxPostsPerScan,
+    });
     saveRefreshSettings();
   }
 
@@ -3699,8 +3874,10 @@
     const settingsRefs = getSettingsModalElementRefs(overlay);
     if (!settingsRefs) return;
 
-    STATE.config.ntfyTopic = getPersistedNtfyTopic();
-    STATE.config.discordWebhook = getPersistedDiscordWebhook();
+    setConfigPatch({
+      ntfyTopic: getPersistedNtfyTopic(),
+      discordWebhook: getPersistedDiscordWebhook(),
+    });
     populateSettingsModalFields(settingsRefs);
     renderSettingsMode();
     setOverlayVisibility(settingsRefs.overlay, true);
@@ -3721,8 +3898,10 @@
     const excludeEl = panel.querySelector("#fbgr-exclude");
     if (!includeEl || !excludeEl) return;
 
-    STATE.config.includeKeywords = normalizeText(includeEl.value);
-    STATE.config.excludeKeywords = normalizeText(excludeEl.value);
+    setConfigPatch({
+      includeKeywords: normalizeText(includeEl.value),
+      excludeKeywords: normalizeText(excludeEl.value),
+    });
   }
 
   // 判斷 include / exclude 文字是否與已儲存值不同，用於顯示未儲存提示。
@@ -3746,8 +3925,10 @@
   function savePanelKeywordSettings(panelRefs) {
     if (!panelRefs) return;
 
-    STATE.config.includeKeywords = normalizeText(panelRefs.includeEl.value);
-    STATE.config.excludeKeywords = normalizeText(panelRefs.excludeEl.value);
+    setConfigPatch({
+      includeKeywords: normalizeText(panelRefs.includeEl.value),
+      excludeKeywords: normalizeText(panelRefs.excludeEl.value),
+    });
     saveString(STORAGE_KEYS.include, STATE.config.includeKeywords);
     saveString(STORAGE_KEYS.exclude, STATE.config.excludeKeywords);
   }
@@ -3759,17 +3940,41 @@
     runScan("save");
   }
 
+  // 主面板的開始 / 暫停按鈕目前採「暫停」與「重新開始」兩種語義。
+  function getPauseToggleAction(isPaused) {
+    return isPaused ? "restart" : "pause";
+  }
+
+  // 將 paused 狀態寫回執行期與持久化設定。
+  function setPausedState(paused) {
+    setConfigPatch({ paused: Boolean(paused) });
+    saveString(STORAGE_KEYS.paused, String(STATE.config.paused));
+  }
+
+  // 停止監控計時器，保留目前畫面與已看過貼文基準。
+  function pauseMonitoring() {
+    setPausedState(true);
+    clearMonitoringScheduleTimers();
+  }
+
+  // 恢復監控排程，不重置目前群組的 seen 基準。
+  function resumeMonitoring(reason = "manual-start") {
+    setPausedState(false);
+    scheduleScan(reason);
+  }
+
+  // 重新開始目前群組監控，會先清掉該群組的 seen 基準再立即重掃。
+  function restartMonitoringForCurrentGroup(reason = "manual-start") {
+    clearSeenPostsForGroup(getCurrentGroupId());
+    resumeMonitoring(reason);
+  }
+
   // 處理主面板上的「開始 / 暫停」切換。
   function handlePanelPauseToggle() {
-    STATE.config.paused = !STATE.config.paused;
-    saveString(STORAGE_KEYS.paused, String(STATE.config.paused));
-
-    if (STATE.config.paused) {
-      clearRefreshTimer();
-      clearScanTimer();
+    if (getPauseToggleAction(STATE.config.paused) === "pause") {
+      pauseMonitoring();
     } else {
-      clearSeenPostsForGroup(getCurrentGroupId());
-      scheduleScan("manual-start");
+      restartMonitoringForCurrentGroup("manual-start");
     }
 
     requestPanelRender();
@@ -3777,7 +3982,7 @@
 
   // 處理主面板上的除錯區塊開關。
   function handlePanelDebugToggle() {
-    STATE.config.debugVisible = !STATE.config.debugVisible;
+    setConfigPatch({ debugVisible: !STATE.config.debugVisible });
     saveString(STORAGE_KEYS.debugVisible, String(STATE.config.debugVisible));
     requestPanelRender();
   }
@@ -3844,7 +4049,11 @@
 
   // 建立右上角主控制面板，並綁定所有主要互動事件。
   function createPanel() {
-    if (document.getElementById("fb-group-refresh-panel")) return;
+    const existingPanel = getPanelElement();
+    if (existingPanel) {
+      setPanelMountedState(true);
+      return existingPanel;
+    }
 
     const panel = document.createElement("div");
     panel.id = "fb-group-refresh-panel";
@@ -3873,14 +4082,15 @@
     ensurePanelRelatedModalsCreated();
     bindPanelEventHandlers(panel);
 
-    STATE.panelMounted = true;
+    setPanelMountedState(true);
     requestPanelRender();
+    return panel;
   }
 
   // 將下一次 refresh 倒數格式化成面板文字。
   function formatRefreshStatus() {
-    if (!STATE.refreshDeadline) return "未排程";
-    const remainSec = Math.max(0, Math.ceil((STATE.refreshDeadline - Date.now()) / 1000));
+    if (!STATE.schedulerRuntime.refreshDeadline) return "未排程";
+    const remainSec = Math.max(0, Math.ceil((STATE.schedulerRuntime.refreshDeadline - Date.now()) / 1000));
     return `${remainSec}s`;
   }
 
@@ -4178,7 +4388,7 @@
   }
 
   // 建立 debug 區塊需要的 view model，集中所有 fallback 與顯示文字。
-  function getPanelDebugViewState({ latestScan, latestPosts }) {
+  function getPanelDebugViewState({ latestScan, latestPosts, latestError, latestNotification }) {
     const latestScanViewState = buildLatestScanViewState(latestScan);
 
     return {
@@ -4187,15 +4397,14 @@
       includeKeywordsLabel: STATE.config.includeKeywords || "(空白)",
       excludeKeywordsLabel: STATE.config.excludeKeywords || "(空白)",
       ...latestScanViewState,
-      latestNotificationStatusLabel: STATE.latestNotification?.status || "(本次無)",
-      latestErrorLabel: STATE.latestError || "(無)",
+      latestNotificationStatusLabel: getLatestNotificationStatusLabel(latestNotification),
+      latestErrorLabel: latestError || "(無)",
     };
   }
 
   // 建立主面板渲染所需的 view state，避免 render 階段直接散讀 STATE 與 DOM。
-  function getPanelViewState() {
-    const latestScan = STATE.latestScan;
-    const latestPosts = STATE.latestPosts;
+  function getPanelViewState(runtimeSnapshot = buildPanelRuntimeSnapshot()) {
+    const { latestScan, latestPosts, latestError, latestNotification } = runtimeSnapshot;
     const groupName = getCurrentGroupName() || "無法判斷";
     const feedSortLabel = getCurrentFeedSortLabel() || "無法判斷";
 
@@ -4212,6 +4421,8 @@
       debug: getPanelDebugViewState({
         latestScan,
         latestPosts,
+        latestError,
+        latestNotification,
       }),
     };
   }
@@ -4387,15 +4598,15 @@
   // 依 STATE 重新渲染主面板狀態、貼文摘要與 debug 資訊。
   function renderPanel() {
     if (!document.body) return;
-    if (!document.getElementById("fb-group-refresh-panel")) createPanel();
+    if (!getPanelElement()) createPanel();
 
-    const panel = document.getElementById("fb-group-refresh-panel");
+    const panel = getPanelElement();
     if (!panel) return;
     const panelRefs = getPanelElementRefs(panel);
     if (!panelRefs) return;
 
     syncPanelKeywordInputs(panelRefs);
-    const viewState = getPanelViewState();
+    const viewState = getPanelViewState(buildPanelRuntimeSnapshot());
     updatePanelControls(panelRefs, viewState);
     updatePanelStatusSection(panelRefs, viewState);
     updatePanelDebugSection(panelRefs, viewState);
@@ -4408,25 +4619,23 @@
   // 監聽 Facebook 動態 DOM / route 變化並維持腳本生命週期。
   // 重新安裝 MutationObserver，當動態牆新增節點時觸發下一輪掃描。
   function installObserver() {
-    if (STATE.observer) {
-      STATE.observer.disconnect();
-      STATE.observer = null;
-    }
+    disconnectFeedObserver();
 
     const root = findFeedRoot();
     if (!root) return;
 
-    STATE.observer = new MutationObserver((mutations) => {
+    const observer = new MutationObserver((mutations) => {
       const addedNodes = mutations.some((mutation) => mutation.addedNodes && mutation.addedNodes.length > 0);
       if (addedNodes) {
         scheduleScan("mutation");
       }
     });
 
-    STATE.observer.observe(root, {
+    observer.observe(root, {
       childList: true,
       subtree: true,
     });
+    setFeedObserverState(observer);
   }
 
   // 將刷新模式顯示為人類可讀的簡短說明。
@@ -4444,9 +4653,7 @@
 
   // route 切換時重置與本輪掃描結果相關的執行期狀態。
   function resetRouteScanState() {
-    STATE.latestPosts = [];
-    STATE.latestScan = null;
-    STATE.latestError = "";
+    applyScanRuntimeState(buildResetScanRuntimeState());
   }
 
   // 封裝 route 變更後的共同行為，集中處理 refresh / observer / scan / render。
@@ -4459,10 +4666,14 @@
 
   // 主面板若被 Facebook SPA 重新掛載吃掉，補回 panel 並重繪。
   function ensurePanelMountedAndRender() {
-    if (!document.getElementById("fb-group-refresh-panel")) {
-      STATE.panelMounted = false;
+    if (!getPanelElement()) {
+      setPanelMountedState(false);
       createPanel();
       return;
+    }
+
+    if (!STATE.uiRuntime.panelMounted) {
+      setPanelMountedState(true);
     }
 
     requestPanelRender();
@@ -4470,9 +4681,11 @@
 
   // 將目前 URL 與群組資訊同步到 route state，供後續判斷 settle / route-change 使用。
   function syncCurrentRouteState() {
-    STATE.lastUrl = location.href;
-    STATE.lastRouteChangeAt = Date.now();
-    STATE.lastRouteGroupId = getCurrentGroupId();
+    setRouteRuntimePatch({
+      lastUrl: location.href,
+      lastRouteChangeAt: Date.now(),
+      lastRouteGroupId: getCurrentGroupId(),
+    });
   }
 
   // 啟動腳本後的初始 panel / observer / refresh 流程。
@@ -4484,13 +4697,16 @@
 
   // 啟動週期性維護計時器，持續監看 route 與 panel 是否被重掛。
   function startMaintenanceLoops() {
-    STATE.routeTimer = window.setInterval(handleRouteChange, 1000);
-    STATE.renderTimer = window.setInterval(ensurePanelMountedAndRender, 1000);
+    clearMaintenanceLoops();
+    setMaintenanceLoopState(
+      window.setInterval(handleRouteChange, 1000),
+      window.setInterval(ensurePanelMountedAndRender, 1000)
+    );
   }
 
   // 監聽 Facebook SPA 路由變化，切頁時重設狀態並重新安排掃描。
   function handleRouteChange() {
-    if (STATE.lastUrl === location.href) return;
+    if (STATE.routeRuntime.lastUrl === location.href) return;
 
     syncCurrentRouteState();
     handleRouteTransition();
@@ -4507,8 +4723,11 @@
     globalThis.__FB_GROUP_REFRESH_TEST_HOOKS__ = {
       normalizeText,
       normalizeForMatch,
+      getPauseToggleAction,
+      buildRefreshSettingsPayloadFromConfig,
       parseKeywordInput,
       matchRules,
+      shouldUseTopPostShortcut,
       createSeenPostStopState,
       applySeenPostStopObservation,
       buildPostKeyFragments,
@@ -4523,6 +4742,9 @@
       buildCompactNotificationBody,
       buildRemoteNotificationLines,
       buildRemoteNotificationBody,
+      buildFailedScanRuntimeState,
+      buildCompletedNotificationState,
+      getLatestNotificationStatusLabel,
     };
   }
 

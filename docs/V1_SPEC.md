@@ -217,7 +217,6 @@ V1 通知通道：
 目前實作補充：
 
 - `GM_notification` 本地桌面通知預設啟用
-- browser-native notification 程式碼仍保留，但目前未正式暴露成使用者設定
 - `ntfy` 為選填，只有設定 topic 才會發送
 - Discord Webhook 為選填，只有設定 URL 才會發送
 
@@ -294,5 +293,5 @@ V1 應採 fail soft 策略。
 - 不同 group post 變體的 permalink 抽取可能不同
 - 不同語系 UI 可能影響文字型 selector
 - infinite-scroll feed 更新可能產生高噪音 mutation
-- timestamp extraction 目前在實作中仍偏保守，因為 Facebook DOM heuristic 仍可能把留言時間誤當貼文時間
+- `timestampText` / `timestampEpoch` 欄位目前保留為資料形狀的一部分，但不再實作貼文時間抽取
 - 當分頁隱藏或視窗最小化時，瀏覽器背景節流可能延後 refresh timer

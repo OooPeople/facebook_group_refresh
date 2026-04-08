@@ -174,7 +174,7 @@
 - `renderPanel()`、`refresh`、`scan`、`route-change` 的收尾不再散落在各處。
 - startup / route-change / pause 這些常見路徑比較一致。
 - storage 與 timer cleanup 的膠水邏輯開始有共用基礎，後續比較不容易各自漂移。
-- refresh 設定的讀寫欄位也開始走固定 payload，不再分散在 `loadConfig()` / `saveRefreshSettings()` 兩側各自維護。
+- refresh 設定的讀寫欄位也開始走固定 payload，不再分散在 `loadConfig()` / `persistRefreshConfig()` 兩側各自維護。
 
 ### 3. 主面板與設定視窗的資料流已整理成 UI orchestration
 
@@ -228,11 +228,13 @@
 
 - `renderPanel()`、`createPanel()`、`openSettingsModal()` 都更接近 orchestration shell。
 - 主面板的 `儲存`、`開始 / 暫停`、`除錯` 與設定視窗的讀寫流程都已有固定入口。
+- `STATE.config` 的主要更新路徑也已開始收斂成 keyword / refresh / notification / monitoring / UI 幾類 use case helper，而不是每個 event handler 自己決定怎麼改 state 與落盤。
 - panel/status/debug 的字串殼層與 row 組裝也開始分離，後續若要調整欄位或重刷範圍，不需要再回頭修改長段模板。
 - panel status/debug 的欄位順序、單筆列渲染與 row builder 也已各自有固定入口，debug 區塊後續再增減欄位時風險更低。
 - `latestScan` 的欄位 fallback 與 label 映射也開始有單一入口，status/debug 顯示不容易各自漂移。
 - panel/debug 的貼文列表也開始先轉成 view state，再交給 render 層輸出，UI 對 raw runtime post shape 的耦合又再降一層。
 - 後續若要再縮小重刷範圍或拆 UI 區塊，切入點已經比一開始清楚很多。
+- 半正式配置也已再收斂一層，像固定 load-more mode 這類 internal-only capability 不再掛在正式 `config` 下面。
 
 ### 4. modal 與 overlay 相關 UI 共用層已開始成形
 
@@ -287,8 +289,8 @@
   - `collectNotificationStatusParts()`
 - 非現役或 internal-only 能力已明確標示：
   - permalink extraction: `disabled`
-  - timestamp extraction: `disabled`
-  - browser-native notification setting: `internal_only`
+  - timestamp extraction: `removed`
+  - browser-native notification: `removed`
 
 目前效果：
 

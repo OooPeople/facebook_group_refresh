@@ -102,7 +102,6 @@ function createTestContext() {
   };
 
   context.Notification.permission = "denied";
-  context.Notification.requestPermission = async () => "denied";
   context.window = context;
   context.globalThis = context;
   return context;
@@ -135,6 +134,52 @@ function runTests(hooks) {
   assert(
     hooks.getPauseToggleAction(false) === "pause",
     "Expected active state to map to pause semantics."
+  );
+  assert(
+    hooks.getMonitoringControlAction(true) === "restart",
+    "Expected monitoring control action to keep paused-state restart semantics."
+  );
+  assert(
+    hooks.getMonitoringControlLabel("restart") === "開始",
+    "Expected paused action label to always show start."
+  );
+  assert(
+    hooks.getMonitoringControlLabel("pause") === "暫停",
+    "Expected active action label to remain pause."
+  );
+  assert(
+    JSON.stringify(hooks.normalizePanelPosition({ top: 18.4, left: 205.6 })) ===
+      JSON.stringify({ top: 18, left: 206 }),
+    "Expected panel position normalization to round stored coordinates."
+  );
+  assert(
+    hooks.normalizePanelPosition({ top: "bad", left: 12 }) === null,
+    "Expected invalid panel position payloads to be rejected."
+  );
+  assert(
+    JSON.stringify(
+      hooks.clampPanelPosition(
+        { top: -40, left: 999 },
+        { width: 380, height: 240, viewportWidth: 1280, viewportHeight: 720 }
+      )
+    ) === JSON.stringify({ top: 12, left: 888 }),
+    "Expected panel positions to stay within viewport bounds."
+  );
+  assert(
+    JSON.stringify(
+      hooks.buildDraggedPanelPosition(
+        {
+          active: true,
+          startTop: 40,
+          startLeft: 800,
+          startPointerX: 1000,
+          startPointerY: 200,
+        },
+        { clientX: 1200, clientY: 140 },
+        { width: 380, height: 240, viewportWidth: 1280, viewportHeight: 720 }
+      )
+    ) === JSON.stringify({ top: 12, left: 888 }),
+    "Expected drag helper to apply pointer deltas and clamp the final position."
   );
   assert(
     hooks.shouldUseTopPostShortcut("mutation") === true,
@@ -173,6 +218,77 @@ function runTests(hooks) {
   assert(
     hooks.getLatestNotificationStatusLabel(null) === "(本次無)",
     "Expected latest notification status helper to provide an empty fallback."
+  );
+
+  assert(
+    JSON.stringify(
+      hooks.buildKeywordConfigPatch({
+        includeKeywords: "  搖滾 6880  ",
+        excludeKeywords: "  徵  ",
+      })
+    ) === JSON.stringify({
+      includeKeywords: "搖滾 6880",
+      excludeKeywords: "徵",
+    }),
+    "Expected keyword config builder to normalize include / exclude values."
+  );
+
+  assert(
+    JSON.stringify(
+      hooks.buildRefreshConfigPatch(
+        {
+          jitterEnabled: 0,
+          autoLoadMorePosts: "yes",
+          minRefreshSec: 3,
+          maxRefreshSec: 42.8,
+          fixedRefreshSec: 4,
+          maxPostsPerScan: 99,
+        },
+        {
+          minRefreshSec: 25,
+          maxRefreshSec: 35,
+          fixedRefreshSec: 60,
+        }
+      )
+    ) === JSON.stringify({
+      jitterEnabled: false,
+      autoLoadMorePosts: true,
+      minRefreshSec: 5,
+      maxRefreshSec: 42,
+      fixedRefreshSec: 5,
+      maxPostsPerScan: 10,
+    }),
+    "Expected refresh config builder to normalize booleans and clamp numeric values."
+  );
+
+  assert(
+    JSON.stringify(
+      hooks.buildNotificationConfigPatch({
+        ntfyTopic: "  my-topic  ",
+        discordWebhook: "  https://discord.example/webhook  ",
+      })
+    ) === JSON.stringify({
+      ntfyTopic: "my-topic",
+      discordWebhook: "https://discord.example/webhook",
+    }),
+    "Expected notification config builder to normalize endpoint fields."
+  );
+
+  assert(
+    JSON.stringify(hooks.buildMonitoringConfigPatch({ paused: 0 })) ===
+      JSON.stringify({ paused: false }),
+    "Expected monitoring config builder to normalize paused flag."
+  );
+
+  assert(
+    JSON.stringify(hooks.buildUiConfigPatch({ debugVisible: 1 })) ===
+      JSON.stringify({ debugVisible: true }),
+    "Expected UI config builder to normalize debug flag."
+  );
+
+  assert(
+    hooks.getLoadMoreMode() === "scroll",
+    "Expected load-more mode to remain an internal fixed capability."
   );
 
   const refreshPayload = hooks.buildRefreshSettingsPayloadFromConfig({

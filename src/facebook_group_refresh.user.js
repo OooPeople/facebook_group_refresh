@@ -38,6 +38,7 @@
     matchHistory: "fb_group_refresh_match_history",
     lastNotification: "fb_group_refresh_last_notification",
     refreshRange: "fb_group_refresh_refresh_range",
+    panelPosition: "fb_group_refresh_panel_position",
   };
   const STORE_DEFINITIONS = Object.freeze({
     latestTopPosts: { key: STORAGE_KEYS.latestTopPosts, type: "object" },
@@ -45,6 +46,32 @@
     seenPosts: { key: STORAGE_KEYS.seenPosts, type: "object" },
     matchHistory: { key: STORAGE_KEYS.matchHistory, type: "json" },
     lastNotification: { key: STORAGE_KEYS.lastNotification, type: "json" },
+    panelPosition: { key: STORAGE_KEYS.panelPosition, type: "json" },
+  });
+  const CONFIG_FIELD_DEFINITIONS = Object.freeze({
+    includeKeywords: { key: STORAGE_KEYS.include, type: "string", normalize: true },
+    excludeKeywords: { key: STORAGE_KEYS.exclude, type: "string", normalize: true },
+    ntfyTopic: {
+      key: STORAGE_KEYS.ntfyTopic,
+      type: "string",
+      normalize: true,
+      removeWhenEmpty: true,
+    },
+    discordWebhook: {
+      key: STORAGE_KEYS.discordWebhook,
+      type: "string",
+      normalize: true,
+      removeWhenEmpty: true,
+    },
+    paused: { key: STORAGE_KEYS.paused, type: "boolean" },
+    debugVisible: { key: STORAGE_KEYS.debugVisible, type: "boolean" },
+    autoLoadMorePosts: { key: STORAGE_KEYS.autoLoadMorePosts, type: "boolean" },
+  });
+  const CONFIG_GROUP_DEFINITIONS = Object.freeze({
+    keyword: ["includeKeywords", "excludeKeywords"],
+    notification: ["ntfyTopic", "discordWebhook"],
+    monitoring: ["paused"],
+    ui: ["debugVisible"],
   });
 
   const DEFAULT_CONFIG = {
@@ -61,11 +88,18 @@
     jitterEnabled: true,
     fixedRefreshSec: 60,
     autoLoadMorePosts: true,
-    loadMoreMode: "scroll",
     matchHistoryGlobalLimit: 10,
     enableGmNotification: true,
-    enableBrowserNotification: false,
   };
+  const INTERNAL_CONFIG = Object.freeze({
+    loadMoreMode: "scroll",
+  });
+  const PANEL_LAYOUT = Object.freeze({
+    defaultTop: 16,
+    defaultRight: 16,
+    defaultWidth: 380,
+    viewportMargin: 12,
+  });
 
   const SCAN_LIMITS = {
     minTargetPosts: 1,
@@ -122,17 +156,6 @@
       'div[data-ad-comet-preview="message"], div[data-ad-preview="message"], [data-ad-rendering-role="story_message"]',
     postIdSourceNodes:
       'a[href], [data-ft], [data-store], [ajaxify], [id], [href], [aria-label], [aria-labelledby], [aria-describedby], [data-testid], [data-pagelet]',
-    timestampCandidates: [
-      'a[href*="/groups/"][href*="/posts/"]',
-      'a[href*="/permalink/"]',
-      'a[href*="multi_permalinks="]',
-      'a[href*="story_fbid="]',
-      "a[aria-label]",
-      "span[aria-label]",
-      "time",
-      "[datetime]",
-      "[data-utime]",
-    ],
     authorCandidates: [
       "h2 span",
       "h3 span",
@@ -185,22 +208,6 @@
       /"storyID":"?(\d+)/i,
       /\/posts\/pcb\.(\d+)/i,
     ],
-    timestampLoose: [
-      /(\d{1,2}月\d{1,2}日(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
-      /(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
-      /((?:今天|今日|昨天)(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
-      /(\d+\s*(?:秒|分|分鐘|小時|天|週|周|月|年))/i,
-      /(\d+\s*(?:hrs?|mins?|min|hour|hours|day|days|week|weeks|month|months|year|years))/i,
-      /(剛剛|昨天|今日|今天)/i,
-    ],
-    timestampSafe: [
-      /(\d{1,2}\s*\u6708\s*\d{1,2}\s*\u65e5(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
-      /(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
-      /((?:\u4eca\u5929|\u4eca\u65e5|\u6628\u5929)(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
-      /(\d+\s*(?:\u79d2|\u5206(?:\u9418)?|\u5c0f\u6642|\u5929|\u9031|\u5468|\u6708|\u5e74))/i,
-      /(\d+\s*(?:hrs?|mins?|min|hour|hours|day|days|week|weeks|month|months|year|years))/i,
-      /(\u525b\u525b|\u6628\u5929|\u4eca\u65e5|\u4eca\u5929)/i,
-    ],
     cleanedTextNoise: [
       /\b[a-z0-9]{12,}\.com\b/gi,
       /\bsnproSet[a-z0-9]+\b/gi,
@@ -212,12 +219,9 @@
   const ROUTE_SETTLE_MS = 3000;
   const FEATURE_STATUS = Object.freeze({
     permalinkExtraction: "disabled",
-    timestampExtraction: "disabled",
-    browserNotificationSetting: "internal_only",
   });
   const NOTIFICATION_CHANNEL_DEFINITIONS = Object.freeze([
     { id: "gmDesktop", skippedStatus: "" },
-    { id: "browserDesktop", skippedStatus: "" },
     { id: "ntfy", skippedStatus: "ntfy_skipped" },
     { id: "discord", skippedStatus: "discord_skipped" },
   ]);
@@ -241,6 +245,8 @@
     },
     uiRuntime: {
       panelMounted: false,
+      panelPosition: getPanelPositionStore(),
+      panelDrag: buildIdlePanelDragState(),
     },
     schedulerRuntime: {
       observer: null,
@@ -347,11 +353,108 @@
     setUiRuntimePatch({ panelMounted: Boolean(panelMounted) });
   }
 
+  // 建立 panel 拖曳 runtime 的預設狀態。
+  function buildIdlePanelDragState() {
+    return {
+      active: false,
+      pointerId: null,
+      startPointerX: 0,
+      startPointerY: 0,
+      startTop: 0,
+      startLeft: 0,
+    };
+  }
+
+  // 同步 panel 位置到 ui runtime，必要時一併持久化。
+  function setPanelPositionState(panelPosition, options = {}) {
+    const normalized = normalizePanelPosition(panelPosition);
+    setUiRuntimePatch({ panelPosition: normalized });
+    if (options.persist) {
+      setPanelPositionStore(normalized);
+    }
+    return normalized;
+  }
+
+  // 同步 panel 拖曳 runtime，避免 DOM handler 直接散寫 ui state。
+  function setPanelDragState(panelDrag) {
+    setUiRuntimePatch({
+      panelDrag: panelDrag && typeof panelDrag === "object"
+        ? { ...buildIdlePanelDragState(), ...panelDrag }
+        : buildIdlePanelDragState(),
+    });
+  }
+
+  // 判斷 patch 是否真的帶有指定欄位，避免把 undefined 視為有意更新。
+  function hasOwnPatchValue(patch, key) {
+    return Boolean(patch) && Object.prototype.hasOwnProperty.call(patch, key);
+  }
+
   // ==========================================================================
   // Storage / Config
   // ==========================================================================
 
   // 設定載入與儲存包裝，統一處理 Tampermonkey storage / legacy localStorage。
+  function getConfigFieldDefinition(name) {
+    return CONFIG_FIELD_DEFINITIONS[name] || null;
+  }
+
+  // 讀取 config group 定義，讓對外設定與 storage key mapping 集中管理。
+  function getConfigGroupFields(groupName) {
+    return CONFIG_GROUP_DEFINITIONS[groupName] || [];
+  }
+
+  // 依欄位型別從持久化 storage 讀回單一 config 值。
+  function loadPersistedConfigField(name, fallback = DEFAULT_CONFIG[name]) {
+    const definition = getConfigFieldDefinition(name);
+    if (!definition) return fallback;
+
+    if (definition.type === "boolean") {
+      return loadBoolean(definition.key, fallback);
+    }
+
+    const value = loadString(definition.key, fallback);
+    return definition.normalize ? normalizeText(value) : value;
+  }
+
+  // 讀回一組 config 欄位，避免 loadConfig() 與 UI call site 直接碰 storage key。
+  function loadPersistedConfigGroup(groupName, baseConfig = DEFAULT_CONFIG) {
+    const patch = {};
+
+    for (const fieldName of getConfigGroupFields(groupName)) {
+      patch[fieldName] = loadPersistedConfigField(fieldName, baseConfig[fieldName]);
+    }
+
+    return patch;
+  }
+
+  // 依欄位型別將單一 config 值寫回 storage，必要時順手移除空值欄位。
+  function persistConfigFieldValue(name, value) {
+    const definition = getConfigFieldDefinition(name);
+    if (!definition) return value;
+
+    if (definition.type === "boolean") {
+      const normalized = Boolean(value);
+      saveString(definition.key, String(normalized));
+      return normalized;
+    }
+
+    const normalized = definition.normalize ? normalizeText(value) : String(value || "");
+    if (definition.removeWhenEmpty && !normalized) {
+      removeStorageKey(definition.key);
+      return normalized;
+    }
+
+    saveString(definition.key, normalized);
+    return normalized;
+  }
+
+  // 批次寫回同一組 config 欄位，讓 persistence path 與 UI handler 解耦。
+  function persistConfigGroup(groupName, config = STATE.config) {
+    for (const fieldName of getConfigGroupFields(groupName)) {
+      persistConfigFieldValue(fieldName, config[fieldName]);
+    }
+  }
+
   // 將 refresh 相關持久化欄位轉成 config override，集中舊格式相容邏輯。
   function loadRefreshConfigOverrides() {
     const refreshRange = loadJson(STORAGE_KEYS.refreshRange, null);
@@ -361,11 +464,10 @@
       jitterEnabled: refreshRange?.jitterEnabled ?? DEFAULT_CONFIG.jitterEnabled,
       fixedRefreshSec: refreshRange?.fixedSec ?? DEFAULT_CONFIG.fixedRefreshSec,
       maxPostsPerScan: clampTargetPostCount(refreshRange?.maxPostsPerScan ?? DEFAULT_CONFIG.maxPostsPerScan),
-      autoLoadMorePosts: loadBoolean(
-        STORAGE_KEYS.autoLoadMorePosts,
+      autoLoadMorePosts: loadPersistedConfigField(
+        "autoLoadMorePosts",
         refreshRange?.autoLoadMorePosts ?? DEFAULT_CONFIG.autoLoadMorePosts
       ),
-      loadMoreMode: DEFAULT_CONFIG.loadMoreMode,
     };
   }
 
@@ -381,64 +483,36 @@
     };
   }
 
-  // 組出 refresh 設定的持久化 payload，避免讀寫欄位各自漂移。
-  function buildRefreshSettingsPayload() {
-    return buildRefreshSettingsPayloadFromConfig(STATE.config);
-  }
-
   // 從持久化儲存讀回目前設定，並將舊格式 refreshRange 合併回執行設定。
   function loadConfig() {
     return {
       ...DEFAULT_CONFIG,
-      includeKeywords: loadString(STORAGE_KEYS.include, DEFAULT_CONFIG.includeKeywords),
-      excludeKeywords: loadString(STORAGE_KEYS.exclude, DEFAULT_CONFIG.excludeKeywords),
-      ntfyTopic: loadString(STORAGE_KEYS.ntfyTopic, DEFAULT_CONFIG.ntfyTopic),
-      discordWebhook: loadString(STORAGE_KEYS.discordWebhook, DEFAULT_CONFIG.discordWebhook),
-      paused: loadBoolean(STORAGE_KEYS.paused, DEFAULT_CONFIG.paused),
-      debugVisible: loadBoolean(STORAGE_KEYS.debugVisible, DEFAULT_CONFIG.debugVisible),
+      ...loadPersistedConfigGroup("keyword"),
+      ...loadPersistedConfigGroup("notification"),
+      ...loadPersistedConfigGroup("monitoring"),
+      ...loadPersistedConfigGroup("ui"),
       ...loadRefreshConfigOverrides(),
     };
   }
 
-  function saveRefreshSettings() {
-    saveJson(STORAGE_KEYS.refreshRange, buildRefreshSettingsPayload());
-    saveNtfyTopicSetting(STATE.config.ntfyTopic);
-    saveDiscordWebhookSetting(STATE.config.discordWebhook);
-    saveString(STORAGE_KEYS.autoLoadMorePosts, String(STATE.config.autoLoadMorePosts));
-  }
-
   // 讀取並正規化已保存的 ntfy topic。
   function getPersistedNtfyTopic() {
-    return normalizeText(loadString(STORAGE_KEYS.ntfyTopic, DEFAULT_CONFIG.ntfyTopic));
+    return loadPersistedConfigField("ntfyTopic", DEFAULT_CONFIG.ntfyTopic);
   }
 
   // 保存 ntfy topic；空字串時直接移除設定。
-  function saveNtfyTopicSetting(value) {
-    const topic = normalizeText(value);
-    setConfigPatch({ ntfyTopic: topic });
-
-    if (topic) {
-      saveString(STORAGE_KEYS.ntfyTopic, topic);
-    } else {
-      removeStorageKey(STORAGE_KEYS.ntfyTopic);
-    }
+  function persistNtfyTopicValue(value) {
+    return persistConfigFieldValue("ntfyTopic", value);
   }
 
   // 讀取並正規化已保存的 Discord Webhook URL。
   function getPersistedDiscordWebhook() {
-    return normalizeText(loadString(STORAGE_KEYS.discordWebhook, DEFAULT_CONFIG.discordWebhook));
+    return loadPersistedConfigField("discordWebhook", DEFAULT_CONFIG.discordWebhook);
   }
 
   // 保存 Discord Webhook URL；空字串時直接移除設定。
-  function saveDiscordWebhookSetting(value) {
-    const webhook = normalizeText(value);
-    setConfigPatch({ discordWebhook: webhook });
-
-    if (webhook) {
-      saveString(STORAGE_KEYS.discordWebhook, webhook);
-    } else {
-      removeStorageKey(STORAGE_KEYS.discordWebhook);
-    }
+  function persistDiscordWebhookValue(value) {
+    return persistConfigFieldValue("discordWebhook", value);
   }
 
   // 以字串形式讀取儲存值，讀不到時回傳預設值。
@@ -522,6 +596,36 @@
     const definition = getStoreDefinition(name);
     if (!definition) return;
     saveJson(definition.key, value);
+  }
+
+  // 將 panel 位置正規化成可持久化的 top/left 座標。
+  function normalizePanelPosition(value) {
+    const top = Math.round(Number(value?.top));
+    const left = Math.round(Number(value?.left));
+    if (!Number.isFinite(top) || !Number.isFinite(left)) {
+      return null;
+    }
+
+    return {
+      top,
+      left,
+    };
+  }
+
+  // 讀取已持久化的 panel 位置。
+  function getPanelPositionStore() {
+    return normalizePanelPosition(loadNamedJsonStore("panelPosition", null));
+  }
+
+  // 寫回已持久化的 panel 位置；空值時清掉 storage。
+  function setPanelPositionStore(position) {
+    const normalized = normalizePanelPosition(position);
+    if (!normalized) {
+      removeStorageKey(STORAGE_KEYS.panelPosition);
+      return;
+    }
+
+    saveNamedJsonStore("panelPosition", normalized);
   }
 
   // 檢查目前環境是否可使用 Tampermonkey GM storage API。
@@ -630,6 +734,191 @@
   }
 
   // ==========================================================================
+  // Config Use Cases
+  // ==========================================================================
+
+  // 這些 helper 只處理正式對外設定；internal-only 行為不再混進 STATE.config。
+  function getLoadMoreMode() {
+    return INTERNAL_CONFIG.loadMoreMode;
+  }
+
+  // 將 include / exclude 關鍵字草稿整理成標準 config patch。
+  function buildKeywordConfigPatch(patch = {}) {
+    const nextPatch = {};
+
+    if (hasOwnPatchValue(patch, "includeKeywords")) {
+      nextPatch.includeKeywords = normalizeText(patch.includeKeywords);
+    }
+    if (hasOwnPatchValue(patch, "excludeKeywords")) {
+      nextPatch.excludeKeywords = normalizeText(patch.excludeKeywords);
+    }
+
+    return nextPatch;
+  }
+
+  // 將 refresh 相關設定草稿整理成標準 config patch。
+  function buildRefreshConfigPatch(patch = {}, baseConfig = STATE.config) {
+    const nextPatch = {};
+
+    if (hasOwnPatchValue(patch, "jitterEnabled")) {
+      nextPatch.jitterEnabled = Boolean(patch.jitterEnabled);
+    }
+    if (hasOwnPatchValue(patch, "autoLoadMorePosts")) {
+      nextPatch.autoLoadMorePosts = Boolean(patch.autoLoadMorePosts);
+    }
+    if (hasOwnPatchValue(patch, "minRefreshSec")) {
+      nextPatch.minRefreshSec = Math.max(
+        5,
+        Math.floor(Number(patch.minRefreshSec) || baseConfig.minRefreshSec)
+      );
+    }
+    if (hasOwnPatchValue(patch, "maxRefreshSec")) {
+      nextPatch.maxRefreshSec = Math.max(
+        5,
+        Math.floor(Number(patch.maxRefreshSec) || baseConfig.maxRefreshSec)
+      );
+    }
+    if (hasOwnPatchValue(patch, "fixedRefreshSec")) {
+      nextPatch.fixedRefreshSec = Math.max(
+        5,
+        Math.floor(Number(patch.fixedRefreshSec) || baseConfig.fixedRefreshSec)
+      );
+    }
+    if (hasOwnPatchValue(patch, "maxPostsPerScan")) {
+      nextPatch.maxPostsPerScan = clampTargetPostCount(patch.maxPostsPerScan);
+    }
+
+    return nextPatch;
+  }
+
+  // 將通知端點草稿整理成標準 config patch。
+  function buildNotificationConfigPatch(patch = {}) {
+    const nextPatch = {};
+
+    if (hasOwnPatchValue(patch, "ntfyTopic")) {
+      nextPatch.ntfyTopic = normalizeText(patch.ntfyTopic);
+    }
+    if (hasOwnPatchValue(patch, "discordWebhook")) {
+      nextPatch.discordWebhook = normalizeText(patch.discordWebhook);
+    }
+
+    return nextPatch;
+  }
+
+  // 將 monitoring 旗標整理成標準 config patch。
+  function buildMonitoringConfigPatch(patch = {}) {
+    const nextPatch = {};
+
+    if (hasOwnPatchValue(patch, "paused")) {
+      nextPatch.paused = Boolean(patch.paused);
+    }
+
+    return nextPatch;
+  }
+
+  // 將 UI 旗標整理成標準 config patch。
+  function buildUiConfigPatch(patch = {}) {
+    const nextPatch = {};
+
+    if (hasOwnPatchValue(patch, "debugVisible")) {
+      nextPatch.debugVisible = Boolean(patch.debugVisible);
+    }
+
+    return nextPatch;
+  }
+
+  // 寫回 include / exclude 正式設定。
+  function persistKeywordConfig(config = STATE.config) {
+    persistConfigGroup("keyword", config);
+  }
+
+  // 寫回 refresh 相關正式設定。
+  function persistRefreshConfig(config = STATE.config) {
+    saveJson(STORAGE_KEYS.refreshRange, buildRefreshSettingsPayloadFromConfig(config));
+    persistConfigFieldValue("autoLoadMorePosts", config.autoLoadMorePosts);
+  }
+
+  // 寫回通知端點設定。
+  function persistNotificationConfig(config = STATE.config) {
+    persistConfigGroup("notification", config);
+  }
+
+  // 寫回 monitoring 設定。
+  function persistMonitoringConfig(config = STATE.config) {
+    persistConfigGroup("monitoring", config);
+  }
+
+  // 寫回 UI 設定。
+  function persistUiConfig(config = STATE.config) {
+    persistConfigGroup("ui", config);
+  }
+
+  // 更新 include / exclude 正式設定，必要時同步持久化。
+  function applyKeywordConfigPatch(patch, options = {}) {
+    const normalizedPatch = buildKeywordConfigPatch(patch);
+    if (!Object.keys(normalizedPatch).length) return normalizedPatch;
+
+    setConfigPatch(normalizedPatch);
+    if (options.persist) {
+      persistKeywordConfig();
+    }
+
+    return normalizedPatch;
+  }
+
+  // 更新 refresh 正式設定，必要時同步持久化。
+  function applyRefreshConfigPatch(patch, options = {}) {
+    const normalizedPatch = buildRefreshConfigPatch(patch);
+    if (!Object.keys(normalizedPatch).length) return normalizedPatch;
+
+    setConfigPatch(normalizedPatch);
+    if (options.persist) {
+      persistRefreshConfig();
+    }
+
+    return normalizedPatch;
+  }
+
+  // 更新通知端點設定，必要時同步持久化。
+  function applyNotificationConfigPatch(patch, options = {}) {
+    const normalizedPatch = buildNotificationConfigPatch(patch);
+    if (!Object.keys(normalizedPatch).length) return normalizedPatch;
+
+    setConfigPatch(normalizedPatch);
+    if (options.persist) {
+      persistNotificationConfig();
+    }
+
+    return normalizedPatch;
+  }
+
+  // 更新 monitoring 設定，必要時同步持久化。
+  function applyMonitoringConfigPatch(patch, options = {}) {
+    const normalizedPatch = buildMonitoringConfigPatch(patch);
+    if (!Object.keys(normalizedPatch).length) return normalizedPatch;
+
+    setConfigPatch(normalizedPatch);
+    if (options.persist) {
+      persistMonitoringConfig();
+    }
+
+    return normalizedPatch;
+  }
+
+  // 更新 UI 設定，必要時同步持久化。
+  function applyUiConfigPatch(patch, options = {}) {
+    const normalizedPatch = buildUiConfigPatch(patch);
+    if (!Object.keys(normalizedPatch).length) return normalizedPatch;
+
+    setConfigPatch(normalizedPatch);
+    if (options.persist) {
+      persistUiConfig();
+    }
+
+    return normalizedPatch;
+  }
+
+  // ==========================================================================
   // Text / Common Utils
   // ==========================================================================
 
@@ -695,6 +984,67 @@
   function truncate(value, maxLen) {
     const text = String(value || "");
     return text.length <= maxLen ? text : `${text.slice(0, maxLen - 3)}...`;
+  }
+
+  // 將數值夾在指定上下界之間。
+  function clampNumber(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  // 計算 panel 在目前 viewport 下可用的定位邊界。
+  function getPanelPositionBounds(metrics = {}) {
+    const width = Math.max(0, Math.round(Number(metrics.width) || PANEL_LAYOUT.defaultWidth));
+    const height = Math.max(0, Math.round(Number(metrics.height) || 0));
+    const viewportWidth = Math.max(
+      width + PANEL_LAYOUT.viewportMargin * 2,
+      Math.round(Number(metrics.viewportWidth) || window.innerWidth || PANEL_LAYOUT.defaultWidth)
+    );
+    const viewportHeight = Math.max(
+      height + PANEL_LAYOUT.viewportMargin * 2,
+      Math.round(Number(metrics.viewportHeight) || window.innerHeight || 0)
+    );
+
+    return {
+      width,
+      height,
+      viewportWidth,
+      viewportHeight,
+      minLeft: PANEL_LAYOUT.viewportMargin,
+      minTop: PANEL_LAYOUT.viewportMargin,
+      maxLeft: Math.max(
+        PANEL_LAYOUT.viewportMargin,
+        viewportWidth - width - PANEL_LAYOUT.viewportMargin
+      ),
+      maxTop: Math.max(
+        PANEL_LAYOUT.viewportMargin,
+        viewportHeight - height - PANEL_LAYOUT.viewportMargin
+      ),
+    };
+  }
+
+  // 依目前 viewport 邊界夾住 panel 定位，避免被拖出畫面外。
+  function clampPanelPosition(position, metrics = {}) {
+    const normalized = normalizePanelPosition(position);
+    if (!normalized) return null;
+
+    const bounds = getPanelPositionBounds(metrics);
+    return {
+      top: clampNumber(normalized.top, bounds.minTop, bounds.maxTop),
+      left: clampNumber(normalized.left, bounds.minLeft, bounds.maxLeft),
+    };
+  }
+
+  // 用拖曳起點與目前 pointer 位移，計算下一個 panel 定位。
+  function buildDraggedPanelPosition(dragState, pointer, metrics = {}) {
+    if (!dragState?.active) return null;
+
+    return clampPanelPosition(
+      {
+        top: dragState.startTop + (Number(pointer?.clientY) - dragState.startPointerY),
+        left: dragState.startLeft + (Number(pointer?.clientX) - dragState.startPointerX),
+      },
+      metrics
+    );
   }
 
   // 小型 async 延遲工具，配合 DOM 展開與滾動等待使用。
@@ -1467,223 +1817,6 @@
     return "";
   }
 
-  // Experimental / disabled: 時間欄位抽取工具目前不參與主流程。
-  // 這一組函式先保留，等確認不會把留言時間誤判成貼文時間後再考慮恢復。
-  // 清理時間字串周圍的分隔符號與多餘空白。
-  function sanitizeTimestampText(value) {
-    return normalizeText(String(value || "").replace(/^[\u00B7\u2022]\s*/, "").replace(/\s*[\u00B7\u2022]\s*$/, ""));
-  }
-
-  // 從一般字串中抓可能的時間片段，屬於較寬鬆的早期版本。
-  function extractTimestampFragment(value) {
-    const text = sanitizeTimestampText(value);
-    if (!text) return "";
-
-    const compact = text.replace(/\s+/g, "");
-    return sanitizeTimestampText(
-      extractFirstPatternMatch([text, compact], REGEX_PATTERNS.timestampLoose)
-    );
-  }
-
-  // 較保守地抽取時間片段，盡量避免把一般文字誤判成時間。
-  function extractTimestampFragmentSafe(value) {
-    const text = sanitizeTimestampText(value);
-    if (!text) return "";
-
-    const compact = text.replace(/\s+/g, "");
-    const signal = text.replace(/[^\d/:\uFF1Aa-zA-Z\u4eca\u65e5\u6628\u5929\u525b\u5206\u9418\u5c0f\u6642\u5929\u9031\u5468\u6708\u5e74\u65e5\u4e0a\u4e0b\u5348]/g, "");
-    return sanitizeTimestampText(
-      extractFirstPatternMatch([text, compact, signal], REGEX_PATTERNS.timestampSafe)
-    );
-  }
-
-  // 判斷某個 anchor 是否像是貼文本身的時間連結，而不是留言或其他導頁。
-  function isLikelyPostTimestampAnchor(node, permalink) {
-    if (!(node instanceof HTMLAnchorElement)) return false;
-
-    const href = node.href || node.getAttribute("href") || "";
-    if (!href) return false;
-
-    const permalinkId = extractPostIdFromValue(permalink);
-    const hrefId = extractPostIdFromValue(href);
-
-    if (permalinkId && hrefId) {
-      return permalinkId === hrefId;
-    }
-
-    return (
-      href.includes("/posts/") ||
-      href.includes("/permalink/") ||
-      href.includes("multi_permalinks=") ||
-      href.includes("story_fbid=")
-    );
-  }
-
-  // 以節點在畫面中的垂直位置排序，優先處理較靠上的時間節點。
-  function getTimestampNodeSortValue(node) {
-    if (!(node instanceof HTMLElement)) return Number.MAX_SAFE_INTEGER;
-
-    const rect = node.getBoundingClientRect();
-    return Math.round(rect.top);
-  }
-
-  // 有些時間文字藏在 aria-labelledby 對應節點，這裡把它們一併攤平收集。
-  function getAriaLabelledTextCandidates(node) {
-    if (!(node instanceof HTMLElement)) return [];
-
-    const ids = String(node.getAttribute("aria-labelledby") || "")
-      .split(/\s+/)
-      .map((value) => value.trim())
-      .filter(Boolean);
-
-    const candidates = [];
-    for (const id of ids) {
-      const target = document.getElementById(id);
-      if (!(target instanceof HTMLElement)) continue;
-
-      candidates.push(sanitizeTimestampText(target.innerText || ""));
-      candidates.push(sanitizeTimestampText(target.textContent || ""));
-      candidates.push(sanitizeTimestampText(target.getAttribute("aria-label") || ""));
-      candidates.push(sanitizeTimestampText(target.getAttribute("title") || ""));
-    }
-
-    return candidates.filter(Boolean);
-  }
-
-  // 在指定區域內收集時間候選節點，並拆成偏好節點與備援節點兩組。
-  function collectTimestampNodesInScope(scope, selectors, permalink) {
-    const preferredNodes = [];
-    const fallbackNodes = [];
-    if (!(scope instanceof HTMLElement)) {
-      return { preferredNodes, fallbackNodes };
-    }
-
-    for (const node of getSelectorElementsByOrder(scope, selectors)) {
-      if (isLikelyPostTimestampAnchor(node, permalink)) {
-        preferredNodes.push(node);
-      } else {
-        fallbackNodes.push(node);
-      }
-    }
-
-    return {
-      preferredNodes: sortElementsByViewportTop(preferredNodes),
-      fallbackNodes: sortElementsByViewportTop(fallbackNodes),
-    };
-  }
-
-  // 先試偏好節點，再試備援節點，取第一個可用的時間字串。
-  function extractTimestampFromNodes(preferredNodes, fallbackNodes, permalink) {
-    for (const node of preferredNodes) {
-      const candidate = extractTimestampCandidate(node, permalink);
-      if (candidate) return candidate;
-    }
-
-    for (const node of fallbackNodes) {
-      const candidate = extractTimestampCandidate(node, permalink);
-      if (candidate) return candidate;
-    }
-
-    return "";
-  }
-
-  // 嘗試鎖定貼文 header 區域，讓時間抽取不要誤吃到留言時間。
-  function findPostHeaderElement(container, permalink) {
-    if (!(container instanceof HTMLElement)) return null;
-
-    const profileName = container.querySelector('[data-ad-rendering-role="profile_name"]');
-    if (!(profileName instanceof HTMLElement)) return null;
-
-    let current = profileName.parentElement;
-    while (current && current !== container && current instanceof HTMLElement) {
-      const matchingAnchor = current.querySelector(SELECTORS.postPermalinkAnchors);
-      if (matchingAnchor instanceof HTMLElement && isLikelyPostTimestampAnchor(matchingAnchor, permalink)) {
-        return current;
-      }
-      current = current.parentElement;
-    }
-
-    return null;
-  }
-
-  // 綜合 header 優先、位置排序與屬性候選來抽取貼文時間。
-  function extractTimestampText(container, permalink) {
-    const headerElement = findPostHeaderElement(container, permalink);
-    if (headerElement) {
-      const headerNodes = collectTimestampNodesInScope(headerElement, SELECTORS.timestampCandidates, permalink);
-      const headerTimestamp = extractTimestampFromNodes(headerNodes.preferredNodes, headerNodes.fallbackNodes, permalink);
-      if (headerTimestamp) return headerTimestamp;
-      return "";
-    }
-
-    const preferredHeaderNodes = [];
-    const fallbackHeaderNodes = [];
-    const preferredNodes = [];
-    const fallbackNodes = [];
-    const containerRect = container.getBoundingClientRect();
-    const headerThreshold = Math.max(140, Math.min(260, Math.round(containerRect.height * 0.35 || 220)));
-
-    for (const node of getSelectorElementsByOrder(container, SELECTORS.timestampCandidates)) {
-      const isHeaderRegion = getTimestampNodeSortValue(node) - Math.round(containerRect.top) <= headerThreshold;
-
-      if (isLikelyPostTimestampAnchor(node, permalink)) {
-        preferredNodes.push(node);
-        if (isHeaderRegion) preferredHeaderNodes.push(node);
-      } else {
-        fallbackNodes.push(node);
-        if (isHeaderRegion) fallbackHeaderNodes.push(node);
-      }
-    }
-
-    const sortedPreferredHeaderNodes = sortElementsByViewportTop(preferredHeaderNodes);
-    const sortedFallbackHeaderNodes = sortElementsByViewportTop(fallbackHeaderNodes);
-    const sortedPreferredNodes = sortElementsByViewportTop(preferredNodes);
-    const sortedFallbackNodes = sortElementsByViewportTop(fallbackNodes);
-
-    const headerTimestamp = extractTimestampFromNodes(sortedPreferredHeaderNodes, sortedFallbackHeaderNodes, permalink);
-    if (headerTimestamp) return headerTimestamp;
-
-    if (sortedPreferredHeaderNodes.length || sortedFallbackHeaderNodes.length) {
-      return "";
-    }
-
-    return extractTimestampFromNodes(sortedPreferredNodes, sortedFallbackNodes, permalink);
-  }
-
-  // 從單一節點上常見的時間來源屬性逐一抽取可用值。
-  function extractTimestampCandidate(node, permalink) {
-    if (!(node instanceof HTMLElement)) return "";
-
-    if (node instanceof HTMLAnchorElement) {
-      const href = node.href || "";
-      if (permalink && href && !isLikelyPostTimestampAnchor(node, permalink)) {
-        return "";
-      }
-    }
-
-    const candidates = [
-      sanitizeTimestampText(node.getAttribute("datetime") || ""),
-      sanitizeTimestampText(node.getAttribute("data-utime") || ""),
-      sanitizeTimestampText(node.getAttribute("aria-label") || ""),
-      sanitizeTimestampText(node.getAttribute("title") || ""),
-      sanitizeTimestampText(node.innerText || ""),
-      sanitizeTimestampText(node.textContent || ""),
-      ...getAriaLabelledTextCandidates(node),
-    ];
-
-    for (const candidate of candidates) {
-      const timestamp = extractTimestampFragmentSafe(candidate);
-      if (timestamp) return timestamp;
-    }
-
-    return "";
-  }
-
-  // 用於 fallback 文字抽取時排除看起來像時間的片段。
-  function isProbablyTimestamp(value) {
-    return Boolean(extractTimestampFragmentSafe(value));
-  }
-
   // ==========================================================================
   // Post Parsing / Notification Formatting
   // ==========================================================================
@@ -1719,7 +1852,6 @@
       normalize: cleanExtractedText,
       minLength: 6,
       maxItems: 8,
-      shouldInclude: (text) => !isProbablyTimestamp(text),
     });
 
     if (fallbackSnippets.length) {
@@ -2076,11 +2208,10 @@
     );
   }
 
-  // 清空指定群組的已看過貼文紀錄，並移除其他群組殘留的去重資料。
+  // 清空指定群組的已看過貼文紀錄；若沒有 groupId，則不做任何事。
   function clearSeenPostsForGroup(groupId) {
     const normalizedGroupId = String(groupId || "");
     if (!normalizedGroupId) {
-      setSeenPostsStore({});
       return;
     }
 
@@ -2258,8 +2389,8 @@
     const textDetails = extractPostTextDetails(container);
     const text = textDetails.text;
     const author = extractAuthor(container);
-    // Facebook post timestamp extraction is temporarily disabled because the
-    // current DOM heuristics still confuse post time with comment time.
+    // Timestamp fields remain in the post shape for compatibility, but the
+    // script no longer attempts to extract post time from Facebook DOM.
     const timestampText = "";
     const groupId = getCurrentGroupId();
     const containerRole = container.matches('[role="article"]') ? "article" : "feed_child";
@@ -2435,7 +2566,7 @@
 
   // 依設定執行下一輪 load-more 動作。
   function performConfiguredLoadMore() {
-    if (STATE.config.loadMoreMode === "wheel") {
+    if (getLoadMoreMode() === "wheel") {
       performWheelLikeLoad();
       return;
     }
@@ -2744,7 +2875,7 @@
   function normalizeCollectedMeta(meta = {}) {
     return {
       targetCount: STATE.config.maxPostsPerScan,
-      mode: STATE.config.autoLoadMorePosts ? STATE.config.loadMoreMode : "off",
+      mode: STATE.config.autoLoadMorePosts ? getLoadMoreMode() : "off",
       attempted: false,
       attempts: 0,
       beforeCount: 0,
@@ -3168,48 +3299,10 @@
     }
   }
 
-  // 瀏覽器原生通知僅在已取得權限時額外送出。
-  function sendBrowserDesktopNotification(post, title, compactBody) {
-    if (!STATE.config.enableBrowserNotification || !("Notification" in window)) {
-      return "";
-    }
-
-    try {
-      if (Notification.permission !== "granted") {
-        return "";
-      }
-
-      const notification = new Notification(title, { body: compactBody });
-      if (post.permalink) {
-        notification.onclick = () => {
-          window.open(post.permalink, "_blank", "noopener,noreferrer");
-        };
-      }
-
-      return "browser_sent";
-    } catch (error) {
-      return "browser_failed";
-    }
-  }
-
-  // Experimental / internal-only: browser-native 通知路徑仍保留在程式內，
-  // 但目前沒有對外暴露成設定視窗中的正式選項。
-  // 若啟用原生桌面通知，主動請求權限或回報目前權限狀態。
-  async function requestBrowserNotificationPermission() {
-    try {
-      if (!("Notification" in window)) return "unsupported";
-      if (Notification.permission === "granted") return "granted";
-      if (Notification.permission === "denied") return "denied";
-      return await Notification.requestPermission();
-    } catch (error) {
-      return "error";
-    }
-  }
-
   // 透過 ntfy topic 傳送遠端通知；未設定 topic 時直接跳過。
   function sendNtfyNotification({ title, body, clickUrl }) {
     const topic = getPersistedNtfyTopic();
-    setConfigPatch({ ntfyTopic: topic });
+    applyNotificationConfigPatch({ ntfyTopic: topic });
     if (!topic) {
       return Promise.resolve("ntfy_skipped");
     }
@@ -3246,7 +3339,7 @@
   // 透過 Discord Webhook 傳送遠端通知；未設定 URL 時直接跳過。
   function sendDiscordWebhookNotification({ title, body, clickUrl }) {
     const webhook = getPersistedDiscordWebhook();
-    setConfigPatch({ discordWebhook: webhook });
+    applyNotificationConfigPatch({ discordWebhook: webhook });
     if (!webhook) {
       return Promise.resolve("discord_skipped");
     }
@@ -3311,9 +3404,6 @@
   function buildNotificationChannelRunnerMap(post, payload) {
     return {
       gmDesktop: () => Promise.resolve(sendGmDesktopNotification(payload.title, payload.compactBody)),
-      browserDesktop: () => Promise.resolve(
-        sendBrowserDesktopNotification(post, payload.title, payload.compactBody)
-      ),
       ntfy: () => sendNtfyNotification({
         title: payload.title,
         body: payload.remoteBody,
@@ -3370,7 +3460,6 @@
 
   // 從設定視窗觸發的手動測試通知。
   async function sendTestNotification() {
-    await requestBrowserNotificationPermission();
     const mockPost = {
       author: "Test",
       includeRule: "manual test",
@@ -3716,18 +3805,24 @@
   function applySettingsModalDraft(draft) {
     if (!draft) return;
 
-    setConfigPatch({
-      jitterEnabled: draft.jitterEnabled,
-      ntfyTopic: draft.ntfyTopic,
-      discordWebhook: draft.discordWebhook,
-      autoLoadMorePosts: draft.autoLoadMorePosts,
-      loadMoreMode: DEFAULT_CONFIG.loadMoreMode,
-      minRefreshSec: draft.minRefreshSec,
-      maxRefreshSec: draft.maxRefreshSec,
-      fixedRefreshSec: draft.fixedRefreshSec,
-      maxPostsPerScan: draft.maxPostsPerScan,
-    });
-    saveRefreshSettings();
+    applyRefreshConfigPatch(
+      {
+        jitterEnabled: draft.jitterEnabled,
+        autoLoadMorePosts: draft.autoLoadMorePosts,
+        minRefreshSec: draft.minRefreshSec,
+        maxRefreshSec: draft.maxRefreshSec,
+        fixedRefreshSec: draft.fixedRefreshSec,
+        maxPostsPerScan: draft.maxPostsPerScan,
+      },
+      { persist: true }
+    );
+    applyNotificationConfigPatch(
+      {
+        ntfyTopic: draft.ntfyTopic,
+        discordWebhook: draft.discordWebhook,
+      },
+      { persist: true }
+    );
   }
 
   // 將目前設定回填到設定視窗欄位。
@@ -3749,8 +3844,13 @@
     const draft = readSettingsModalDraft(settingsRefs);
     if (!draft) return;
 
-    saveNtfyTopicSetting(draft.ntfyTopic);
-    saveDiscordWebhookSetting(draft.discordWebhook);
+    applyNotificationConfigPatch(
+      {
+        ntfyTopic: draft.ntfyTopic,
+        discordWebhook: draft.discordWebhook,
+      },
+      { persist: true }
+    );
     sendTestNotification();
   }
 
@@ -3874,7 +3974,7 @@
     const settingsRefs = getSettingsModalElementRefs(overlay);
     if (!settingsRefs) return;
 
-    setConfigPatch({
+    applyNotificationConfigPatch({
       ntfyTopic: getPersistedNtfyTopic(),
       discordWebhook: getPersistedDiscordWebhook(),
     });
@@ -3898,7 +3998,7 @@
     const excludeEl = panel.querySelector("#fbgr-exclude");
     if (!includeEl || !excludeEl) return;
 
-    setConfigPatch({
+    applyKeywordConfigPatch({
       includeKeywords: normalizeText(includeEl.value),
       excludeKeywords: normalizeText(excludeEl.value),
     });
@@ -3915,22 +4015,25 @@
 
     const currentInclude = normalizeText(includeEl.value);
     const currentExclude = normalizeText(excludeEl.value);
-    const savedInclude = loadString(STORAGE_KEYS.include, DEFAULT_CONFIG.includeKeywords);
-    const savedExclude = loadString(STORAGE_KEYS.exclude, DEFAULT_CONFIG.excludeKeywords);
+    const savedKeywordConfig = loadPersistedConfigGroup("keyword");
 
-    return currentInclude !== savedInclude || currentExclude !== savedExclude;
+    return (
+      currentInclude !== savedKeywordConfig.includeKeywords ||
+      currentExclude !== savedKeywordConfig.excludeKeywords
+    );
   }
 
   // 將主面板目前輸入的 include / exclude 草稿寫回設定與 storage。
   function savePanelKeywordSettings(panelRefs) {
     if (!panelRefs) return;
 
-    setConfigPatch({
+    applyKeywordConfigPatch(
+      {
       includeKeywords: normalizeText(panelRefs.includeEl.value),
       excludeKeywords: normalizeText(panelRefs.excludeEl.value),
-    });
-    saveString(STORAGE_KEYS.include, STATE.config.includeKeywords);
-    saveString(STORAGE_KEYS.exclude, STATE.config.excludeKeywords);
+      },
+      { persist: true }
+    );
   }
 
   // 處理主面板上的「儲存」按鈕。
@@ -3940,15 +4043,28 @@
     runScan("save");
   }
 
-  // 主面板的開始 / 暫停按鈕目前採「暫停」與「重新開始」兩種語義。
-  function getPauseToggleAction(isPaused) {
+  // 依目前 paused 狀態決定主面板監控按鈕的動作語義。
+  function getMonitoringControlAction(isPaused) {
     return isPaused ? "restart" : "pause";
+  }
+
+  // 保留舊名稱給 smoke test 與既有呼叫端，實際語義已轉成 monitoring control。
+  function getPauseToggleAction(isPaused) {
+    return getMonitoringControlAction(isPaused);
+  }
+
+  // 將 monitoring action 轉成面板按鈕文字；UI 只維持「開始 / 暫停」兩種顯示。
+  function getMonitoringControlLabel(action) {
+    if (action === "restart") {
+      return "開始";
+    }
+
+    return "暫停";
   }
 
   // 將 paused 狀態寫回執行期與持久化設定。
   function setPausedState(paused) {
-    setConfigPatch({ paused: Boolean(paused) });
-    saveString(STORAGE_KEYS.paused, String(STATE.config.paused));
+    applyMonitoringConfigPatch({ paused }, { persist: true });
   }
 
   // 停止監控計時器，保留目前畫面與已看過貼文基準。
@@ -3960,31 +4076,180 @@
   // 恢復監控排程，不重置目前群組的 seen 基準。
   function resumeMonitoring(reason = "manual-start") {
     setPausedState(false);
+    scheduleRefresh();
     scheduleScan(reason);
+  }
+
+  // 清掉目前群組的 seen baseline；若目前不在群組頁則直接略過。
+  function resetSeenBaselineForCurrentGroup() {
+    const groupId = getCurrentGroupId();
+    if (!groupId) return false;
+
+    clearSeenPostsForGroup(groupId);
+    return true;
   }
 
   // 重新開始目前群組監控，會先清掉該群組的 seen 基準再立即重掃。
   function restartMonitoringForCurrentGroup(reason = "manual-start") {
-    clearSeenPostsForGroup(getCurrentGroupId());
+    resetSeenBaselineForCurrentGroup();
     resumeMonitoring(reason);
   }
 
-  // 處理主面板上的「開始 / 暫停」切換。
-  function handlePanelPauseToggle() {
-    if (getPauseToggleAction(STATE.config.paused) === "pause") {
+  // 統一處理 panel 觸發的 monitoring action，集中 pause / restart 的收尾。
+  function performPanelMonitoringAction(action, reason = "manual-start") {
+    if (action === "pause") {
       pauseMonitoring();
-    } else {
-      restartMonitoringForCurrentGroup("manual-start");
+    } else if (action === "restart") {
+      restartMonitoringForCurrentGroup(reason);
     }
 
     requestPanelRender();
   }
 
+  // 處理主面板上的「開始 / 暫停」切換。
+  function handlePanelPauseToggle() {
+    performPanelMonitoringAction(getMonitoringControlAction(STATE.config.paused), "manual-start");
+  }
+
   // 處理主面板上的除錯區塊開關。
   function handlePanelDebugToggle() {
-    setConfigPatch({ debugVisible: !STATE.config.debugVisible });
-    saveString(STORAGE_KEYS.debugVisible, String(STATE.config.debugVisible));
+    applyUiConfigPatch({ debugVisible: !STATE.config.debugVisible }, { persist: true });
     requestPanelRender();
+  }
+
+  // 取得目前 panel 的 viewport / 尺寸資訊，供拖曳邊界與重掛校正共用。
+  function getPanelPositionMetrics(panel) {
+    const rect = panel?.getBoundingClientRect?.() || {};
+    return {
+      width: Math.round(rect.width || panel?.offsetWidth || PANEL_LAYOUT.defaultWidth),
+      height: Math.round(rect.height || panel?.offsetHeight || 0),
+      viewportWidth: window.innerWidth || document.documentElement?.clientWidth || PANEL_LAYOUT.defaultWidth,
+      viewportHeight: window.innerHeight || document.documentElement?.clientHeight || 0,
+    };
+  }
+
+  // 將目前 panel 位置套到 DOM；未持久化時維持右上角預設定位。
+  function applyPanelPositionToElement(panel, panelPosition = STATE.uiRuntime.panelPosition) {
+    if (!(panel instanceof HTMLElement)) return null;
+
+    panel.style.bottom = "auto";
+    panel.style.top = `${PANEL_LAYOUT.defaultTop}px`;
+
+    if (!panelPosition) {
+      panel.style.left = "auto";
+      panel.style.right = `${PANEL_LAYOUT.defaultRight}px`;
+      return null;
+    }
+
+    const clampedPosition = clampPanelPosition(panelPosition, getPanelPositionMetrics(panel));
+    if (!clampedPosition) return null;
+
+    panel.style.top = `${clampedPosition.top}px`;
+    panel.style.left = `${clampedPosition.left}px`;
+    panel.style.right = "auto";
+    return clampedPosition;
+  }
+
+  // 若 viewport 改變導致 panel 超出邊界，將目前位置夾回畫面內並同步持久化。
+  function syncPanelPositionWithinViewport(panel) {
+    if (!(panel instanceof HTMLElement) || !STATE.uiRuntime.panelPosition) return;
+
+    const clampedPosition = applyPanelPositionToElement(panel, STATE.uiRuntime.panelPosition);
+    if (
+      !clampedPosition ||
+      (clampedPosition.top === STATE.uiRuntime.panelPosition.top &&
+        clampedPosition.left === STATE.uiRuntime.panelPosition.left)
+    ) {
+      return;
+    }
+
+    setPanelPositionState(clampedPosition, { persist: true });
+  }
+
+  // 在拖曳開始時建立 panelDrag runtime，統一起點資料。
+  function startPanelDrag(event, panel) {
+    const rect = panel.getBoundingClientRect();
+    const startLeft = Number.isFinite(STATE.uiRuntime.panelPosition?.left)
+      ? STATE.uiRuntime.panelPosition.left
+      : Math.round(rect.left);
+    const startTop = Number.isFinite(STATE.uiRuntime.panelPosition?.top)
+      ? STATE.uiRuntime.panelPosition.top
+      : Math.round(rect.top);
+
+    setPanelDragState({
+      active: true,
+      pointerId: event.pointerId,
+      startPointerX: event.clientX,
+      startPointerY: event.clientY,
+      startTop,
+      startLeft,
+    });
+  }
+
+  // 依目前 pointer 位置更新 panel DOM 與 ui runtime 定位。
+  function updatePanelDragPosition(event, panel) {
+    const nextPosition = buildDraggedPanelPosition(
+      STATE.uiRuntime.panelDrag,
+      event,
+      getPanelPositionMetrics(panel)
+    );
+    if (!nextPosition) return;
+
+    setPanelPositionState(nextPosition);
+    applyPanelPositionToElement(panel, nextPosition);
+  }
+
+  // 結束 panel 拖曳並將目前位置持久化。
+  function finishPanelDrag() {
+    if (STATE.uiRuntime.panelPosition) {
+      setPanelPositionState(STATE.uiRuntime.panelPosition, { persist: true });
+    }
+    setPanelDragState(null);
+  }
+
+  // 綁定主面板標題列拖曳，避免把拖曳事件散落到 render / createPanel 之外。
+  function bindPanelDragHandlers(panel, panelRefs) {
+    const dragHandleEl = panelRefs?.dragHandleEl;
+    if (!dragHandleEl) return;
+
+    dragHandleEl.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      if (event.target instanceof Element && event.target.closest("button, input, textarea, a")) {
+        return;
+      }
+
+      event.preventDefault();
+      startPanelDrag(event, panel);
+
+      const onPointerMove = (moveEvent) => {
+        if (!STATE.uiRuntime.panelDrag.active) return;
+        if (
+          STATE.uiRuntime.panelDrag.pointerId != null &&
+          moveEvent.pointerId !== STATE.uiRuntime.panelDrag.pointerId
+        ) {
+          return;
+        }
+
+        updatePanelDragPosition(moveEvent, panel);
+      };
+      const onPointerEnd = (endEvent) => {
+        if (
+          STATE.uiRuntime.panelDrag.pointerId != null &&
+          endEvent.pointerId !== STATE.uiRuntime.panelDrag.pointerId
+        ) {
+          return;
+        }
+
+        finishPanelDrag();
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerEnd);
+        window.removeEventListener("pointercancel", onPointerEnd);
+      };
+
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerEnd);
+      window.addEventListener("pointercancel", onPointerEnd);
+    });
   }
 
   // 綁定主面板上的互動事件，讓 createPanel() 保持在殼層。
@@ -4014,7 +4279,7 @@
   // 建立主面板的固定外層 HTML。
   function renderPanelShellHtml() {
     return `
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;">
+      <div id="fbgr-panel-drag-handle" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;cursor:move;user-select:none;touch-action:none;">
         <div style="font-size:15px;font-weight:bold;">Facebook 社團監看</div>
         <button id="fbgr-debug-toggle" style="padding:4px 8px;cursor:pointer;">除錯</button>
       </div>
@@ -4079,8 +4344,10 @@
     panel.innerHTML = renderPanelShellHtml();
 
     document.body.appendChild(panel);
+    applyPanelPositionToElement(panel);
     ensurePanelRelatedModalsCreated();
     bindPanelEventHandlers(panel);
+    bindPanelDragHandlers(panel, getPanelElementRefs(panel));
 
     setPanelMountedState(true);
     requestPanelRender();
@@ -4342,7 +4609,7 @@
       reasonLabel: latestScan?.reason || "(無)",
       baselineModeLabel: latestScan?.baselineMode ? "是" : "否",
       targetPostCountLabel: String(latestScan?.targetCount ?? STATE.config.maxPostsPerScan),
-      loadMoreModeLabel: latestScan?.loadMoreMode || STATE.config.loadMoreMode,
+      loadMoreModeLabel: latestScan?.loadMoreMode || getLoadMoreMode(),
       topPostShortcutLabel: latestScan?.topPostShortcutUsed
         ? (latestScan?.topPostShortcutMatched ? "命中，已跳過深度掃描" : "已檢查，需完整掃描")
         : "未啟用",
@@ -4409,7 +4676,7 @@
     const feedSortLabel = getCurrentFeedSortLabel() || "無法判斷";
 
     return {
-      pauseButtonLabel: STATE.config.paused ? "開始" : "暫停",
+      pauseButtonLabel: getMonitoringControlLabel(getMonitoringControlAction(STATE.config.paused)),
       unsavedKeywordChanges: hasUnsavedKeywordChanges(),
       debugVisible: STATE.config.debugVisible,
       status: getPanelStatusViewState({
@@ -4439,6 +4706,7 @@
       statusEl: panel.querySelector("#fbgr-status"),
       debugEl: panel.querySelector("#fbgr-debug"),
       unsavedEl: panel.querySelector("#fbgr-unsaved-indicator"),
+      dragHandleEl: panel.querySelector("#fbgr-panel-drag-handle"),
     };
 
     if (
@@ -4446,7 +4714,8 @@
       !refs.excludeEl ||
       !refs.pauseEl ||
       !refs.statusEl ||
-      !refs.debugEl
+      !refs.debugEl ||
+      !refs.dragHandleEl
     ) {
       return null;
     }
@@ -4605,6 +4874,7 @@
     const panelRefs = getPanelElementRefs(panel);
     if (!panelRefs) return;
 
+    syncPanelPositionWithinViewport(panel);
     syncPanelKeywordInputs(panelRefs);
     const viewState = getPanelViewState(buildPanelRuntimeSnapshot());
     updatePanelControls(panelRefs, viewState);
@@ -4648,7 +4918,7 @@
 
   // 將載入更多模式轉成面板可讀標籤。
   function formatLoadMoreModeLabel() {
-    return STATE.config.loadMoreMode === "wheel" ? "模擬滑鼠滾輪" : "溫和捲動";
+    return getLoadMoreMode() === "wheel" ? "模擬滑鼠滾輪" : "溫和捲動";
   }
 
   // route 切換時重置與本輪掃描結果相關的執行期狀態。
@@ -4723,8 +4993,20 @@
     globalThis.__FB_GROUP_REFRESH_TEST_HOOKS__ = {
       normalizeText,
       normalizeForMatch,
+      getMonitoringControlAction,
       getPauseToggleAction,
+      getMonitoringControlLabel,
+      buildKeywordConfigPatch,
+      buildRefreshConfigPatch,
       buildRefreshSettingsPayloadFromConfig,
+      buildNotificationConfigPatch,
+      buildMonitoringConfigPatch,
+      buildUiConfigPatch,
+      getLoadMoreMode,
+      normalizePanelPosition,
+      getPanelPositionBounds,
+      clampPanelPosition,
+      buildDraggedPanelPosition,
       parseKeywordInput,
       matchRules,
       shouldUseTopPostShortcut,

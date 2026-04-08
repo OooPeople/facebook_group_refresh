@@ -250,6 +250,8 @@
 - `STATE` 先分成 `config / scanRuntime / notificationRuntime / routeRuntime / uiRuntime / schedulerRuntime / sessionRuntime`
 - 各 runtime 的寫入優先走分類明確的 patch helper
 - timer / observer / panel runtime 以 orchestration helper 統一收口
+- 正式設定優先透過 keyword / refresh / notification / monitoring / UI 的 use case helper 更新
+- 不對外開放的能力，例如固定 load-more 策略或 internal-only 通知能力，應降階成 internal config，而不是混進正式設定模型
 
 這是這份模板很重要的部分，因為它讓：
 

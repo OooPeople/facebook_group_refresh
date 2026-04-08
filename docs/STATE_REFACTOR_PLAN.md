@@ -168,8 +168,14 @@ const STATE = {
 
 目前 `scripts/smoke_check_userscript.js` 已涵蓋：
 
+- `buildKeywordConfigPatch()`
+- `buildRefreshConfigPatch()`
 - `getPauseToggleAction()`
 - `buildRefreshSettingsPayloadFromConfig()`
+- `buildNotificationConfigPatch()`
+- `buildMonitoringConfigPatch()`
+- `buildUiConfigPatch()`
+- `getLoadMoreMode()`
 - `shouldUseTopPostShortcut()`
 - `buildFailedScanRuntimeState()`
 - `buildCompletedNotificationState()`
@@ -194,8 +200,15 @@ const STATE = {
 
 - 仍然是單一 mutable `STATE` 物件，不是完整 state framework
 - 讀取面沒有全面 facade 化
-- `config` 仍同時承接設定值與持久化語義
+- `config` 雖已補上 keyword / refresh / notification / monitoring / UI 的 use case helper，但仍同時承接設定值與持久化語義
 - 單檔 userscript 的 UI / scheduler / notifier 仍共享同一個執行環境
+
+另外，這一輪也刻意把半正式配置再收斂一層：
+
+- `loadMoreMode` 已從正式 `STATE.config` 移出，改為 `INTERNAL_CONFIG.loadMoreMode`
+- browser-native notification 程式碼路徑已移除，不再保留 internal-only 開關
+
+也就是說，目前正式對外設定與 internal-only capability 已開始分開，避免讓 `STATE.config` 看起來比實際產品面更大。
 
 這些取捨是刻意保留的，因為目前專案規模下：
 

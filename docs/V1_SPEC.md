@@ -1,5 +1,7 @@
 # V1 Specification
 
+This document started as a planning spec. Parts of it are now implemented in `src/facebook_group_refresh.user.js`.
+
 ## Objective
 
 Build a Tampermonkey userscript for Facebook group pages that:
@@ -33,11 +35,13 @@ The panel should be fixed on the page and remain visible without blocking core c
 ### Required controls
 
 - `Include keywords` input
+- `Include keyword help` button
 - `Exclude keywords` input
 - `Save` button
 - `Pause monitoring` button
 - `Scan now` button
-- `Test notification` button
+- `History` button
+- `Settings` button
 - `Debug panel toggle`
 
 ### Suggested status area
@@ -77,6 +81,7 @@ V1 should keep configuration in local browser storage with clear keys.
 Suggested settings:
 - include keywords
 - exclude keywords
+- `ntfy` topic
 - monitoring paused flag
 - debug panel visible flag
 - refresh min seconds
@@ -139,6 +144,10 @@ Priority:
 
 The extractor should inspect only the most recent N posts per pass.
 
+Current implementation target:
+- accumulate up to 5 unique posts across multiple visible feed windows
+- keep seen-post history bounded to 5 per group
+
 ## Matching flow
 
 For each normalized post:
@@ -165,8 +174,9 @@ The seen-post store should:
 ## Notification behavior
 
 V1 notification channels:
-- local browser notification
-- optional `ntfy` if enabled later
+- local userscript notification
+- optional browser notification
+- optional `ntfy`
 
 Rules:
 - test notification must not add a fake post into dedupe storage
@@ -222,6 +232,7 @@ Suggested key prefix:
 Suggested keys:
 - `fb_group_refresh_include`
 - `fb_group_refresh_exclude`
+- `fb_group_refresh_ntfy_topic`
 - `fb_group_refresh_paused`
 - `fb_group_refresh_debug_visible`
 - `fb_group_refresh_seen_posts`

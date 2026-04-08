@@ -6,6 +6,9 @@
 // @author       Codex
 // @match        https://www.facebook.com/groups/*
 // @grant        GM_notification
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
 // @grant        GM_xmlhttpRequest
 // @connect      ntfy.sh
 // @run-at       document-idle
@@ -31,9 +34,9 @@
   };
 
   const DEFAULT_CONFIG = {
-    includeKeywords: "",
-    excludeKeywords: "",
-    paused: false,
+    includeKeywords: "4/4 熱區; 4/4 109; 4/4 117",
+    excludeKeywords: "徵",
+    paused: true,
     debugVisible: false,
     ntfyTopic: "",
     maxPostsPerScan: 5,
@@ -81,6 +84,7 @@
       maxRefreshSec: refreshRange?.max ?? DEFAULT_CONFIG.maxRefreshSec,
       jitterEnabled: refreshRange?.jitterEnabled ?? DEFAULT_CONFIG.jitterEnabled,
       fixedRefreshSec: refreshRange?.fixedSec ?? DEFAULT_CONFIG.fixedRefreshSec,
+      maxPostsPerScan: refreshRange?.maxPostsPerScan ?? DEFAULT_CONFIG.maxPostsPerScan,
       autoLoadMorePosts: loadBoolean(STORAGE_KEYS.autoLoadMorePosts, refreshRange?.autoLoadMorePosts ?? DEFAULT_CONFIG.autoLoadMorePosts),
       loadMoreMode: DEFAULT_CONFIG.loadMoreMode,
     };
@@ -92,15 +96,16 @@
       max: STATE.config.maxRefreshSec,
       jitterEnabled: STATE.config.jitterEnabled,
       fixedSec: STATE.config.fixedRefreshSec,
+      maxPostsPerScan: STATE.config.maxPostsPerScan,
       autoLoadMorePosts: STATE.config.autoLoadMorePosts,
     });
-    saveString(STORAGE_KEYS.ntfyTopic, STATE.config.ntfyTopic);
+    saveNtfyTopicSetting(STATE.config.ntfyTopic);
     saveString(STORAGE_KEYS.autoLoadMorePosts, String(STATE.config.autoLoadMorePosts));
   }
 
   function loadString(key, fallback) {
     try {
-      const value = localStorage.getItem(key);
+      const value = loadStoredRawValue(key);
       return value == null ? fallback : String(value);
     } catch (error) {
       return fallback;
@@ -109,7 +114,7 @@
 
   function loadBoolean(key, fallback) {
     try {
-      const raw = localStorage.getItem(key);
+      const raw = loadStoredRawValue(key);
       if (raw == null) return fallback;
       return raw === "true";
     } catch (error) {
@@ -119,7 +124,7 @@
 
   function loadJson(key, fallback) {
     try {
-      const raw = localStorage.getItem(key);
+      const raw = loadStoredRawValue(key);
       if (!raw) return fallback;
       return JSON.parse(raw);
     } catch (error) {
@@ -128,11 +133,106 @@
   }
 
   function saveString(key, value) {
-    localStorage.setItem(key, String(value));
+    saveStoredRawValue(key, String(value));
   }
 
   function saveJson(key, value) {
-    localStorage.setItem(key, JSON.stringify(value));
+    saveStoredRawValue(key, JSON.stringify(value));
+  }
+
+  function removeStorageKey(key) {
+    removeStoredRawValue(key);
+  }
+
+  function hasGmStorage() {
+    return (
+      typeof GM_getValue === "function" &&
+      typeof GM_setValue === "function" &&
+      typeof GM_deleteValue === "function"
+    );
+  }
+
+  function loadStoredRawValue(key) {
+    const gmValue = loadGmRawValue(key);
+    if (gmValue != null) {
+      return gmValue;
+    }
+
+    const legacyValue = loadLegacyLocalStorageValue(key);
+    if (legacyValue == null) {
+      return null;
+    }
+
+    // One-time migration from facebook.com localStorage to Tampermonkey storage.
+    saveStoredRawValue(key, legacyValue);
+    removeLegacyLocalStorageValue(key);
+    return legacyValue;
+  }
+
+  function saveStoredRawValue(key, value) {
+    const normalized = String(value);
+
+    if (hasGmStorage()) {
+      try {
+        GM_setValue(key, normalized);
+      } catch (error) {
+        saveLegacyLocalStorageValue(key, normalized);
+        return;
+      }
+
+      removeLegacyLocalStorageValue(key);
+      return;
+    }
+
+    saveLegacyLocalStorageValue(key, normalized);
+  }
+
+  function removeStoredRawValue(key) {
+    if (hasGmStorage()) {
+      try {
+        GM_deleteValue(key);
+      } catch (error) {
+        // Ignore GM storage cleanup errors and continue clearing legacy storage.
+      }
+    }
+
+    removeLegacyLocalStorageValue(key);
+  }
+
+  function loadGmRawValue(key) {
+    if (!hasGmStorage()) return null;
+
+    try {
+      const value = GM_getValue(key, null);
+      return value == null ? null : String(value);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function loadLegacyLocalStorageValue(key) {
+    try {
+      const value = localStorage.getItem(key);
+      return value == null ? null : String(value);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function saveLegacyLocalStorageValue(key, value) {
+    try {
+      localStorage.setItem(key, String(value));
+    } catch (error) {
+      // Ignore legacy storage write errors.
+    }
+  }
+
+  function removeLegacyLocalStorageValue(key) {
+    try {
+      localStorage.removeItem(key);
+    } catch (error) {
+      // Ignore legacy storage cleanup errors.
+    }
   }
 
   function normalizeText(value) {
@@ -148,6 +248,21 @@
 
   function normalizeForKey(value) {
     return normalizeForMatch(value).replace(/[^a-z0-9\u4e00-\u9fff]+/gi, "");
+  }
+
+  function getPersistedNtfyTopic() {
+    return normalizeText(loadString(STORAGE_KEYS.ntfyTopic, DEFAULT_CONFIG.ntfyTopic));
+  }
+
+  function saveNtfyTopicSetting(value) {
+    const topic = normalizeText(value);
+    STATE.config.ntfyTopic = topic;
+
+    if (topic) {
+      saveString(STORAGE_KEYS.ntfyTopic, topic);
+    } else {
+      removeStorageKey(STORAGE_KEYS.ntfyTopic);
+    }
   }
 
   function escapeHtml(value) {
@@ -167,8 +282,22 @@
 
     STATE.config.includeKeywords = normalizeText(includeEl.value);
     STATE.config.excludeKeywords = normalizeText(excludeEl.value);
-    saveString(STORAGE_KEYS.include, STATE.config.includeKeywords);
-    saveString(STORAGE_KEYS.exclude, STATE.config.excludeKeywords);
+  }
+
+  function hasUnsavedKeywordChanges() {
+    const panel = document.getElementById("fb-group-refresh-panel");
+    if (!panel) return false;
+
+    const includeEl = panel.querySelector("#fbgr-include");
+    const excludeEl = panel.querySelector("#fbgr-exclude");
+    if (!includeEl || !excludeEl) return false;
+
+    const currentInclude = normalizeText(includeEl.value);
+    const currentExclude = normalizeText(excludeEl.value);
+    const savedInclude = loadString(STORAGE_KEYS.include, DEFAULT_CONFIG.includeKeywords);
+    const savedExclude = loadString(STORAGE_KEYS.exclude, DEFAULT_CONFIG.excludeKeywords);
+
+    return currentInclude !== savedInclude || currentExclude !== savedExclude;
   }
 
   function truncate(value, maxLen) {
@@ -273,12 +402,78 @@
     return Math.max(320, Math.floor(window.innerHeight * 0.62));
   }
 
+  function getElementText(element) {
+    if (!(element instanceof HTMLElement)) return "";
+    return normalizeText(element.innerText || element.textContent || "");
+  }
+
   function isVisibleElement(element) {
     if (!element || !(element instanceof HTMLElement)) return false;
     const style = window.getComputedStyle(element);
     if (style.display === "none" || style.visibility === "hidden") return false;
     const rect = element.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
+  }
+
+  function isPostTextExpander(element, container) {
+    if (!(element instanceof HTMLElement) || !(container instanceof HTMLElement)) return false;
+    if (!isVisibleElement(element)) return false;
+
+    const text = getElementText(element);
+    if (!text) return false;
+
+    const isExpandLabel = (
+      text === "顯示更多" ||
+      text === "查看更多" ||
+      text === "See more"
+    );
+    if (!isExpandLabel) return false;
+
+    const containerRect = container.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    const relativeTop = elementRect.top - containerRect.top;
+    const upperRegionThreshold = Math.max(220, Math.round(containerRect.height * 0.72));
+
+    return relativeTop >= -12 && relativeTop <= upperRegionThreshold;
+  }
+
+  function findPostTextExpanders(container) {
+    if (!(container instanceof HTMLElement)) return [];
+
+    const selectors = [
+      'div[role="button"]',
+      'span[role="button"]',
+      'a[role="button"]',
+      "button",
+    ];
+    const results = [];
+    const seen = new Set();
+
+    for (const selector of selectors) {
+      const nodes = container.querySelectorAll(selector);
+      for (const node of nodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (!isPostTextExpander(node, container)) continue;
+        if (seen.has(node)) continue;
+        seen.add(node);
+        results.push(node);
+      }
+    }
+
+    results.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    return results;
+  }
+
+  async function expandCollapsedPostText(container) {
+    if (!(container instanceof HTMLElement)) return;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const expanders = findPostTextExpanders(container);
+      if (!expanders.length) break;
+
+      expanders[0].click();
+      await sleep(220);
+    }
   }
 
   function getCanonicalPostElement(node) {
@@ -442,8 +637,170 @@
     return normalizeText(String(value || "").replace(/^[\u00B7\u2022]\s*/, "").replace(/\s*[\u00B7\u2022]\s*$/, ""));
   }
 
+  function extractTimestampFragment(value) {
+    const text = sanitizeTimestampText(value);
+    if (!text) return "";
+
+    const compact = text.replace(/\s+/g, "");
+    const candidates = [text, compact];
+    const patterns = [
+      /(\d{1,2}月\d{1,2}日(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
+      /(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
+      /((?:今天|今日|昨天)(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
+      /(\d+\s*(?:秒|分|分鐘|小時|天|週|周|月|年))/i,
+      /(\d+\s*(?:hrs?|mins?|min|hour|hours|day|days|week|weeks|month|months|year|years))/i,
+      /(剛剛|昨天|今日|今天)/i,
+    ];
+
+    for (const candidate of candidates) {
+      for (const pattern of patterns) {
+        const match = candidate.match(pattern);
+        if (match && match[1]) {
+          return sanitizeTimestampText(match[1]);
+        }
+      }
+    }
+
+    return "";
+  }
+
+  function extractTimestampFragmentSafe(value) {
+    const text = sanitizeTimestampText(value);
+    if (!text) return "";
+
+    const compact = text.replace(/\s+/g, "");
+    const signal = text.replace(/[^\d/:\uFF1Aa-zA-Z\u4eca\u65e5\u6628\u5929\u525b\u5206\u9418\u5c0f\u6642\u5929\u9031\u5468\u6708\u5e74\u65e5\u4e0a\u4e0b\u5348]/g, "");
+    const candidates = [text, compact, signal];
+    const patterns = [
+      /(\d{1,2}\s*\u6708\s*\d{1,2}\s*\u65e5(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
+      /(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
+      /((?:\u4eca\u5929|\u4eca\u65e5|\u6628\u5929)(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
+      /(\d+\s*(?:\u79d2|\u5206(?:\u9418)?|\u5c0f\u6642|\u5929|\u9031|\u5468|\u6708|\u5e74))/i,
+      /(\d+\s*(?:hrs?|mins?|min|hour|hours|day|days|week|weeks|month|months|year|years))/i,
+      /(\u525b\u525b|\u6628\u5929|\u4eca\u65e5|\u4eca\u5929)/i,
+    ];
+
+    for (const candidate of candidates) {
+      for (const pattern of patterns) {
+        const match = candidate.match(pattern);
+        if (match && match[1]) {
+          return sanitizeTimestampText(match[1]);
+        }
+      }
+    }
+
+    return "";
+  }
+
+  function isLikelyPostTimestampAnchor(node, permalink) {
+    if (!(node instanceof HTMLAnchorElement)) return false;
+
+    const href = node.href || node.getAttribute("href") || "";
+    if (!href) return false;
+
+    const permalinkId = extractPostIdFromValue(permalink);
+    const hrefId = extractPostIdFromValue(href);
+
+    if (permalinkId && hrefId) {
+      return permalinkId === hrefId;
+    }
+
+    return (
+      href.includes("/posts/") ||
+      href.includes("/permalink/") ||
+      href.includes("multi_permalinks=") ||
+      href.includes("story_fbid=")
+    );
+  }
+
+  function getTimestampNodeSortValue(node) {
+    if (!(node instanceof HTMLElement)) return Number.MAX_SAFE_INTEGER;
+
+    const rect = node.getBoundingClientRect();
+    return Math.round(rect.top);
+  }
+
+  function getAriaLabelledTextCandidates(node) {
+    if (!(node instanceof HTMLElement)) return [];
+
+    const ids = String(node.getAttribute("aria-labelledby") || "")
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    const candidates = [];
+    for (const id of ids) {
+      const target = document.getElementById(id);
+      if (!(target instanceof HTMLElement)) continue;
+
+      candidates.push(sanitizeTimestampText(target.innerText || ""));
+      candidates.push(sanitizeTimestampText(target.textContent || ""));
+      candidates.push(sanitizeTimestampText(target.getAttribute("aria-label") || ""));
+      candidates.push(sanitizeTimestampText(target.getAttribute("title") || ""));
+    }
+
+    return candidates.filter(Boolean);
+  }
+
+  function collectTimestampNodesInScope(scope, selectors, permalink) {
+    const preferredNodes = [];
+    const fallbackNodes = [];
+    if (!(scope instanceof HTMLElement)) {
+      return { preferredNodes, fallbackNodes };
+    }
+
+    for (const selector of selectors) {
+      const nodes = scope.querySelectorAll(selector);
+      for (const node of nodes) {
+        if (!(node instanceof HTMLElement)) continue;
+
+        if (isLikelyPostTimestampAnchor(node, permalink)) {
+          preferredNodes.push(node);
+        } else {
+          fallbackNodes.push(node);
+        }
+      }
+    }
+
+    preferredNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
+    fallbackNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
+
+    return { preferredNodes, fallbackNodes };
+  }
+
+  function extractTimestampFromNodes(preferredNodes, fallbackNodes, permalink) {
+    for (const node of preferredNodes) {
+      const candidate = extractTimestampCandidate(node, permalink);
+      if (candidate) return candidate;
+    }
+
+    for (const node of fallbackNodes) {
+      const candidate = extractTimestampCandidate(node, permalink);
+      if (candidate) return candidate;
+    }
+
+    return "";
+  }
+
+  function findPostHeaderElement(container, permalink) {
+    if (!(container instanceof HTMLElement)) return null;
+
+    const profileName = container.querySelector('[data-ad-rendering-role="profile_name"]');
+    if (!(profileName instanceof HTMLElement)) return null;
+
+    let current = profileName.parentElement;
+    while (current && current !== container && current instanceof HTMLElement) {
+      const matchingAnchor = current.querySelector('a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="]');
+      if (matchingAnchor instanceof HTMLElement && isLikelyPostTimestampAnchor(matchingAnchor, permalink)) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+
+    return null;
+  }
+
   function extractTimestampText(container, permalink) {
-    const timestampAnchors = [];
     const maybeTimestampSelectors = [
       'a[href*="/groups/"][href*="/posts/"]',
       'a[href*="/permalink/"]',
@@ -455,20 +812,50 @@
       "[datetime]",
       "[data-utime]",
     ];
+    const headerElement = findPostHeaderElement(container, permalink);
+    if (headerElement) {
+      const headerNodes = collectTimestampNodesInScope(headerElement, maybeTimestampSelectors, permalink);
+      const headerTimestamp = extractTimestampFromNodes(headerNodes.preferredNodes, headerNodes.fallbackNodes, permalink);
+      if (headerTimestamp) return headerTimestamp;
+      return "";
+    }
+
+    const preferredHeaderNodes = [];
+    const fallbackHeaderNodes = [];
+    const preferredNodes = [];
+    const fallbackNodes = [];
+    const containerRect = container.getBoundingClientRect();
+    const headerThreshold = Math.max(140, Math.min(260, Math.round(containerRect.height * 0.35 || 220)));
 
     for (const selector of maybeTimestampSelectors) {
       const nodes = container.querySelectorAll(selector);
       for (const node of nodes) {
-        timestampAnchors.push(node);
+        if (!(node instanceof HTMLElement)) continue;
+        const isHeaderRegion = getTimestampNodeSortValue(node) - Math.round(containerRect.top) <= headerThreshold;
+
+        if (isLikelyPostTimestampAnchor(node, permalink)) {
+          preferredNodes.push(node);
+          if (isHeaderRegion) preferredHeaderNodes.push(node);
+        } else {
+          fallbackNodes.push(node);
+          if (isHeaderRegion) fallbackHeaderNodes.push(node);
+        }
       }
     }
 
-    for (const node of timestampAnchors) {
-      const candidate = extractTimestampCandidate(node, permalink);
-      if (candidate) return candidate;
+    preferredHeaderNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
+    fallbackHeaderNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
+    preferredNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
+    fallbackNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
+
+    const headerTimestamp = extractTimestampFromNodes(preferredHeaderNodes, fallbackHeaderNodes, permalink);
+    if (headerTimestamp) return headerTimestamp;
+
+    if (preferredHeaderNodes.length || fallbackHeaderNodes.length) {
+      return "";
     }
 
-    return "";
+    return extractTimestampFromNodes(preferredNodes, fallbackNodes, permalink);
   }
 
   function extractTimestampCandidate(node, permalink) {
@@ -476,7 +863,7 @@
 
     if (node instanceof HTMLAnchorElement) {
       const href = node.href || "";
-      if (permalink && href && href !== permalink && !href.includes("/posts/") && !href.includes("/permalink/")) {
+      if (permalink && href && !isLikelyPostTimestampAnchor(node, permalink)) {
         return "";
       }
     }
@@ -487,27 +874,20 @@
       sanitizeTimestampText(node.getAttribute("aria-label") || ""),
       sanitizeTimestampText(node.getAttribute("title") || ""),
       sanitizeTimestampText(node.innerText || ""),
+      sanitizeTimestampText(node.textContent || ""),
+      ...getAriaLabelledTextCandidates(node),
     ];
 
     for (const candidate of candidates) {
-      if (isProbablyTimestamp(candidate)) return candidate;
+      const timestamp = extractTimestampFragmentSafe(candidate);
+      if (timestamp) return timestamp;
     }
 
     return "";
   }
 
   function isProbablyTimestamp(value) {
-    const text = normalizeText(value);
-    if (!text) return false;
-    if (text.length > 40) return false;
-
-    return (
-      /\d+\s*(秒|分|分鐘|小時|天|週|周|月|年)/.test(text) ||
-      /\d{1,2}[:：]\d{2}/.test(text) ||
-      /\d{1,2}\/\d{1,2}/.test(text) ||
-      /\d{1,2}月\d{1,2}日/.test(text) ||
-      /(剛剛|昨天|今日|今天|上午|下午|hrs?|mins?|min|hour|hours|day|days|week|weeks|month|months|year|years)/i.test(text)
-    );
+    return Boolean(extractTimestampFragmentSafe(value));
   }
 
   function extractAuthor(container) {
@@ -631,7 +1011,8 @@
   }
 
   function sendNtfyNotification({ title, body, clickUrl }) {
-    const topic = normalizeText(STATE.config.ntfyTopic);
+    const topic = getPersistedNtfyTopic();
+    STATE.config.ntfyTopic = topic;
     if (!topic) {
       return Promise.resolve("ntfy_skipped");
     }
@@ -768,6 +1149,12 @@
     saveJson(STORAGE_KEYS.matchHistory, store);
   }
 
+  function clearMatchHistoryForGroup(groupId) {
+    const store = getMatchHistoryStore();
+    store[groupId] = [];
+    setMatchHistoryStore(store);
+  }
+
   function addMatchHistory(groupId, post) {
     const store = getMatchHistoryStore();
     if (!store[groupId] || !Array.isArray(store[groupId])) {
@@ -795,7 +1182,9 @@
     const postId = extractPostId(permalink, container);
     const text = extractPostText(container);
     const author = extractAuthor(container);
-    const timestampText = extractTimestampText(container, permalink);
+    // Facebook post timestamp extraction is temporarily disabled because the
+    // current DOM heuristics still confuse post time with comment time.
+    const timestampText = "";
     const groupId = getCurrentGroupId();
 
     return {
@@ -812,10 +1201,18 @@
     };
   }
 
-  function collectPostsFromCandidates(candidates) {
-    return candidates
-      .map(extractPostRecord)
-      .filter((post) => normalizeText(post.text));
+  async function collectPostsFromCandidates(candidates) {
+    const posts = [];
+
+    for (const candidate of candidates) {
+      await expandCollapsedPostText(candidate.element);
+      const post = extractPostRecord(candidate);
+      if (normalizeText(post.text)) {
+        posts.push(post);
+      }
+    }
+
+    return posts;
   }
 
   async function collectPostsAcrossWindows() {
@@ -840,7 +1237,7 @@
     result.afterCount = initialCandidates.length;
 
     if (STATE.isLoadingMorePosts) {
-      const initialPosts = dedupeExtractedPosts(collectPostsFromCandidates(initialCandidates), STATE.config.maxPostsPerScan);
+      const initialPosts = dedupeExtractedPosts(await collectPostsFromCandidates(initialCandidates), STATE.config.maxPostsPerScan);
       return { posts: initialPosts, meta: result };
     }
 
@@ -852,7 +1249,7 @@
         result.windowCount = windowIndex + 1;
 
         const candidates = collectPostContainers();
-        const posts = dedupeExtractedPosts(collectPostsFromCandidates(candidates), Number.MAX_SAFE_INTEGER);
+        const posts = dedupeExtractedPosts(await collectPostsFromCandidates(candidates), Number.MAX_SAFE_INTEGER);
         result.candidateCount += candidates.length;
         result.parsedCount += posts.length;
         result.afterCount = Math.max(result.afterCount, candidates.length);
@@ -1148,7 +1545,10 @@
       <div style="max-width:720px;margin:40px auto 0 auto;background:#111827;color:#f9fafb;border:1px solid #4b5563;border-radius:14px;padding:16px;box-shadow:0 18px 40px rgba(0,0,0,0.4);font-family:Consolas, 'Courier New', monospace;">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px;">
           <div style="font-size:16px;font-weight:bold;">符合關鍵字紀錄</div>
-          <button id="fbgr-history-close" style="padding:4px 8px;cursor:pointer;">關閉</button>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button id="fbgr-history-clear" style="padding:4px 8px;cursor:pointer;">清空紀錄</button>
+            <button id="fbgr-history-close" style="padding:4px 8px;cursor:pointer;">關閉</button>
+          </div>
         </div>
         <div id="fbgr-history-content" style="display:grid;gap:10px;max-height:70vh;overflow:auto;"></div>
       </div>
@@ -1159,6 +1559,13 @@
       if (event.target === overlay) {
         closeHistoryModal();
       }
+    });
+    overlay.querySelector("#fbgr-history-clear").addEventListener("click", () => {
+      const groupId = getCurrentGroupId();
+      if (!groupId) return;
+      if (!window.confirm("確定要清空目前社團的符合關鍵字紀錄嗎？")) return;
+      clearMatchHistoryForGroup(groupId);
+      openHistoryModal();
     });
     overlay.querySelector("#fbgr-history-close").addEventListener("click", closeHistoryModal);
   }
@@ -1224,13 +1631,21 @@
           <div style="font-size:16px;font-weight:bold;">關鍵字輸入規則</div>
           <button id="fbgr-include-help-close" style="padding:4px 8px;cursor:pointer;">關閉</button>
         </div>
-        <div style="display:grid;gap:10px;line-height:1.55;">
-          <div><code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">;</code> 表示 OR</div>
-          <div>空格表示 AND</div>
-          <div>示例 1：<code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾;6880;5880</code></div>
-          <div>只要出現 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">6880</code> 或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">5880</code> 就通知。</div>
-          <div>示例 2：<code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾 6880;搖滾 5880</code></div>
-          <div>代表 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 且 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">6880</code>，或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 且 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">5880</code> 才通知。</div>
+        <div style="display:grid;gap:14px;line-height:1.6;">
+          <div style="display:grid;gap:6px;">
+            <div><code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">;</code> 表示 <strong>OR</strong></div>
+            <div>空格表示 <strong>AND</strong></div>
+          </div>
+          <div style="display:grid;gap:8px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
+            <div style="font-weight:bold;">示例 1</div>
+            <div><code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;">搖滾;6880;5880</code></div>
+            <div>只要出現 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">6880</code> 或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">5880</code> 就通知。</div>
+          </div>
+          <div style="display:grid;gap:8px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
+            <div style="font-weight:bold;">示例 2</div>
+            <div><code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;">搖滾 6880;搖滾 5880</code></div>
+            <div>代表 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 且 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">6880</code>，或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 且 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">5880</code> 才通知。</div>
+          </div>
           <div>排除關鍵字也使用同樣規則。</div>
         </div>
       </div>
@@ -1301,11 +1716,15 @@
             </div>
           </div>
           <div style="display:grid;gap:4px;">
+            <label for="fbgr-max-posts-per-scan">每次最多掃描貼文數</label>
+            <input id="fbgr-max-posts-per-scan" type="number" min="1" step="1" style="padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;" />
+          </div>
+          <div style="display:grid;gap:4px;">
             <label for="fbgr-ntfy-topic">ntfy topic</label>
             <input id="fbgr-ntfy-topic" type="text" placeholder="例如：my-facebook-alerts" style="padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;" />
           </div>
           <div style="padding:10px;border:1px solid #374151;border-radius:8px;background:rgba(255,255,255,0.03);color:#d1d5db;">
-            每次最多累積掃描 5 篇唯一貼文。頁面內查看紀錄仍保留最新 10 筆符合關鍵字的通知紀錄。
+            每次最多累積掃描你設定的貼文數。頁面內查看紀錄仍保留最新 10 筆符合關鍵字的通知紀錄。
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-start;">
             <button id="fbgr-settings-test" style="padding:6px 10px;cursor:pointer;">測試通知</button>
@@ -1330,6 +1749,8 @@
     overlay.querySelector("#fbgr-settings-cancel").addEventListener("click", closeSettingsModal);
     overlay.querySelector("#fbgr-jitter-enabled").addEventListener("change", renderSettingsMode);
     overlay.querySelector("#fbgr-settings-test").addEventListener("click", () => {
+      const ntfyTopic = normalizeText(overlay.querySelector("#fbgr-ntfy-topic").value);
+      saveNtfyTopicSetting(ntfyTopic);
       sendTestNotification();
     });
     overlay.querySelector("#fbgr-settings-save").addEventListener("click", () => {
@@ -1339,6 +1760,7 @@
       const minRefreshSec = Math.max(5, Math.floor(Number(overlay.querySelector("#fbgr-refresh-min").value) || STATE.config.minRefreshSec));
       const maxRefreshSec = Math.max(5, Math.floor(Number(overlay.querySelector("#fbgr-refresh-max").value) || STATE.config.maxRefreshSec));
       const fixedRefreshSec = Math.max(5, Math.floor(Number(overlay.querySelector("#fbgr-fixed-refresh").value) || STATE.config.fixedRefreshSec));
+      const maxPostsPerScan = Math.max(1, Math.floor(Number(overlay.querySelector("#fbgr-max-posts-per-scan").value) || STATE.config.maxPostsPerScan));
 
       STATE.config.jitterEnabled = jitterEnabled;
       STATE.config.ntfyTopic = ntfyTopic;
@@ -1347,6 +1769,7 @@
       STATE.config.minRefreshSec = minRefreshSec;
       STATE.config.maxRefreshSec = maxRefreshSec;
       STATE.config.fixedRefreshSec = fixedRefreshSec;
+      STATE.config.maxPostsPerScan = maxPostsPerScan;
       saveRefreshSettings();
       closeSettingsModal();
       scheduleRefresh();
@@ -1368,12 +1791,14 @@
     const overlay = document.getElementById("fbgr-settings-modal");
     if (!overlay) return;
 
+    STATE.config.ntfyTopic = getPersistedNtfyTopic();
     overlay.querySelector("#fbgr-jitter-enabled").checked = STATE.config.jitterEnabled;
     overlay.querySelector("#fbgr-ntfy-topic").value = STATE.config.ntfyTopic;
     overlay.querySelector("#fbgr-auto-load-more").checked = STATE.config.autoLoadMorePosts;
     overlay.querySelector("#fbgr-refresh-min").value = String(STATE.config.minRefreshSec);
     overlay.querySelector("#fbgr-refresh-max").value = String(STATE.config.maxRefreshSec);
     overlay.querySelector("#fbgr-fixed-refresh").value = String(STATE.config.fixedRefreshSec);
+    overlay.querySelector("#fbgr-max-posts-per-scan").value = String(STATE.config.maxPostsPerScan);
     renderSettingsMode();
     overlay.style.display = "block";
   }
@@ -1424,12 +1849,16 @@
           <span>排除關鍵字</span>
           <textarea id="fbgr-exclude" rows="2" style="resize:vertical;padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;"></textarea>
         </label>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          <button id="fbgr-history" style="padding:6px 10px;cursor:pointer;">查看紀錄</button>
-          <button id="fbgr-settings" style="padding:6px 10px;cursor:pointer;">設定</button>
-          <button id="fbgr-save" style="padding:6px 10px;cursor:pointer;">儲存</button>
-          <button id="fbgr-pause" style="padding:6px 10px;cursor:pointer;">暫停</button>
-          <button id="fbgr-scan" style="padding:6px 10px;cursor:pointer;">立即掃描</button>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button id="fbgr-pause" style="padding:6px 10px;cursor:pointer;">開始</button>
+            <button id="fbgr-save" style="padding:6px 10px;cursor:pointer;">儲存</button>
+            <span id="fbgr-unsaved-indicator" style="display:none;align-self:center;font-size:12px;color:#fbbf24;">尚未儲存</span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+            <button id="fbgr-history" style="padding:6px 10px;cursor:pointer;">查看紀錄</button>
+            <button id="fbgr-settings" style="padding:6px 10px;cursor:pointer;">設定</button>
+          </div>
         </div>
         <div id="fbgr-status" style="padding:8px;border:1px solid #374151;border-radius:8px;background:rgba(255,255,255,0.03);"></div>
         <div id="fbgr-debug" style="display:none;padding:8px;border:1px solid #374151;border-radius:8px;background:rgba(0,0,0,0.18);color:#c7d2fe;"></div>
@@ -1468,16 +1897,11 @@
         clearRefreshTimer();
         if (STATE.scanTimer) clearTimeout(STATE.scanTimer);
       } else {
-        scheduleScan("resume");
-        scheduleRefresh();
+        clearSeenPostsForGroup(getCurrentGroupId());
+        runScan("manual-start");
       }
 
       renderPanel();
-    });
-
-    panel.querySelector("#fbgr-scan").addEventListener("click", () => {
-      clearSeenPostsForGroup(getCurrentGroupId());
-      runScan("manual-reset");
     });
 
     panel.querySelector("#fbgr-debug-toggle").addEventListener("click", () => {
@@ -1491,9 +1915,31 @@
   }
 
   function formatRefreshStatus() {
-    if (!STATE.refreshDeadline) return "not scheduled";
+    if (!STATE.refreshDeadline) return "未排程";
     const remainSec = Math.max(0, Math.ceil((STATE.refreshDeadline - Date.now()) / 1000));
     return `${remainSec}s`;
+  }
+
+  function formatLastScanStatus(value) {
+    if (!value) return "(無)";
+
+    const timestamp = new Date(value).getTime();
+    if (!Number.isFinite(timestamp)) {
+      return String(value);
+    }
+
+    const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+    if (diffSec < 5) return "剛剛";
+    if (diffSec < 60) return `${diffSec} 秒前`;
+
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin} 分鐘前`;
+
+    const diffHour = Math.floor(diffMin / 60);
+    if (diffHour < 24) return `${diffHour} 小時前`;
+
+    const diffDay = Math.floor(diffHour / 24);
+    return `${diffDay} 天前`;
   }
 
   function renderPanel() {
@@ -1508,29 +1954,21 @@
     const pauseEl = panel.querySelector("#fbgr-pause");
     const statusEl = panel.querySelector("#fbgr-status");
     const debugEl = panel.querySelector("#fbgr-debug");
+    const unsavedEl = panel.querySelector("#fbgr-unsaved-indicator");
 
     if (includeEl !== document.activeElement) includeEl.value = STATE.config.includeKeywords;
     if (excludeEl !== document.activeElement) excludeEl.value = STATE.config.excludeKeywords;
-    pauseEl.textContent = STATE.config.paused ? "恢復" : "暫停";
+    pauseEl.textContent = STATE.config.paused ? "開始" : "暫停";
+    if (unsavedEl) unsavedEl.style.display = hasUnsavedKeywordChanges() ? "inline" : "none";
 
-    const supported = isSupportedGroupPage();
     const latestScan = STATE.latestScan;
-    const seenStore = getSeenPostsStore();
-    const currentGroupSeenCount = Object.keys(seenStore[getCurrentGroupId()] || {}).length;
 
     statusEl.innerHTML = [
-      `<div>頁面支援: ${supported ? "是" : "否"}</div>`,
       `<div>社團: ${escapeHtml(getCurrentGroupId() || "(無)")}</div>`,
       `<div>狀態: ${STATE.config.paused ? "已暫停" : "監控中"}</div>`,
       `<div>刷新模式: ${escapeHtml(formatRefreshModeLabel())}</div>`,
       `<div>自動載入更多: ${STATE.config.autoLoadMorePosts ? "開" : "關"}</div>`,
-      `<div>上次掃描: ${escapeHtml(latestScan?.finishedAt || "(無)")}</div>`,
-      `<div>視窗掃描次數: ${latestScan?.loadMoreWindowCount ?? 0}</div>`,
-      `<div>累積候選貼文數: ${latestScan?.candidateCount ?? 0}</div>`,
-      `<div>累積解析貼文數: ${latestScan?.parsedCount ?? 0}</div>`,
-      `<div>累積唯一貼文數: ${latestScan?.scannedCount ?? 0}</div>`,
-      `<div>本次通知數: ${latestScan?.notifiedCount ?? 0}</div>`,
-      `<div>已記錄貼文數: ${currentGroupSeenCount}</div>`,
+      `<div>上次掃描: ${escapeHtml(formatLastScanStatus(latestScan?.finishedAt))}</div>`,
       `<div>下次刷新: ${escapeHtml(formatRefreshStatus())}</div>`,
     ].join("");
 
@@ -1623,8 +2061,6 @@
     installObserver();
     scheduleScan("startup");
     scheduleRefresh();
-    window.addEventListener("beforeunload", persistDraftInputs);
-
     STATE.routeTimer = window.setInterval(handleRouteChange, 1000);
     STATE.renderTimer = window.setInterval(() => {
       if (!document.getElementById("fb-group-refresh-panel")) {

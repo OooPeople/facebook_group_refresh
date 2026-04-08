@@ -1,58 +1,245 @@
-# facebook_group_refresh
+# Facebook Group Refresh
 
-`facebook_group_refresh` is a planned Tampermonkey project for monitoring Facebook group pages and notifying the user when new posts match specific keywords.
+一個使用於 Facebook 社團頁面的 Tampermonkey 腳本，用來定時刷新、掃描最新貼文、比對包含與排除關鍵字，並在找到符合條件的新貼文時發送通知。
 
-## Status
+這個專案的目標不是大量爬文，而是提供一個偏保守、可手動調整、適合日常盯票或盯關鍵字貼文的瀏覽器端工具。除了電腦本機通知外，也支援 `ntfy` 推播，方便人在外面時由手機同步接收提醒。
 
-- Experimental userscript created for manual testing.
-- Selector and extraction logic still need real-page validation.
-- The current direction remains a browser-resident Tampermonkey script, not a server crawler.
+## 功能特色
 
-## Why this shape
+- 支援 Facebook 社團頁面監看
+- 支援包含關鍵字與排除關鍵字
+- 支援 `;` 作為 OR、空格作為 AND 的規則寫法
+- 支援關鍵字規則說明彈窗
+- 支援手動掃描、暫停、查看通知紀錄
+- 支援浮動刷新與固定刷新秒數設定
+- 支援自動載入更多貼文，單次最多累積掃描 5 篇唯一貼文
+- 支援 `GM_notification` 電腦通知
+- 支援 `ntfy` 手機推播通知
+- 內建除錯面板，方便檢查掃描與通知狀態
 
-Facebook group monitoring is better treated as an in-browser assistant that works with a normal logged-in session. The first version should stay conservative:
-- refresh or observe the current group page
-- extract a small set of recent posts
-- match include and exclude keywords
-- avoid duplicate alerts
-- notify through an explicit, user-owned channel
+## 專案結構
 
-## Initial scope
+```text
+facebook_group_refresh/
+├─ src/
+│  └─ facebook_group_refresh.user.js
+├─ docs/
+│  ├─ V1_SPEC.md
+│  └─ TASK_BREAKDOWN.md
+├─ .editorconfig
+├─ .gitignore
+└─ README.md
+```
 
-- One active Facebook group page at a time
-- Keyword-based detection for new posts
-- Local dedupe state
-- Local debug visibility
-- Optional notification adapters added only when enabled
+### 各檔案用途
 
-## Out of scope for v1
+- `src/facebook_group_refresh.user.js`
+  Tampermonkey 腳本主程式。
+- `docs/V1_SPEC.md`
+  功能規格與設計方向。
+- `docs/TASK_BREAKDOWN.md`
+  任務拆解與目前完成狀態。
+- `.editorconfig`
+  編輯器格式設定。
+- `.gitignore`
+  Git 忽略規則。
 
-- Automated login
-- Automated likes, comments, or posting
-- Background headless scraping
-- Large-scale multi-account monitoring
-- Anti-detection or stealth features
+## 安裝方式
 
-## Planned structure
+### 1. 安裝 [篡改猴(Tampermonkey)](https://chromewebstore.google.com/detail/dhdgffkkebhmkfjojejmpbldmpobfkfo?utm_source=item-share-cb)
 
-- `AGENTS.md`: agent instructions for this project
-- `GIT_COMMIT_RULES.md`: commit policy
-- `src/`: future userscript source
-- `docs/`: optional design and troubleshooting notes
-- `fixtures/`: optional sanitized sample data
+先在瀏覽器安裝 Tampermonkey 擴充功能。
 
-## Current design docs
+### 2. 安裝腳本
 
-- `docs/V1_SPEC.md`: agreed V1 behavior, UI, matching, dedupe, notification, and debug requirements
-- `docs/TASK_BREAKDOWN.md`: implementation phases and task checklist
+1. 開啟 Tampermonkey 控制台。
+2. 建立一個新的腳本。
+3. 將 [`src/facebook_group_refresh.user.js`](./src/facebook_group_refresh.user.js) 的內容完整貼上。
+4. 儲存腳本。
+5. 重新整理 Facebook 社團頁面。
 
-## Script path
+### 3. 前往 Facebook 社團頁
 
-- `src/facebook_group_refresh.user.js`: Tampermonkey userscript for manual testing in Facebook group pages
+此腳本只會在符合下列網址格式的頁面啟用：
 
-## Notes for future implementation
+```text
+https://www.facebook.com/groups/<group-id>/
+```
 
-- Prefer resilient selectors and observable DOM changes over fragile class-based scraping.
-- Use randomized low-frequency refresh only as a fallback when passive observation is insufficient.
-- Keep notification logic isolated from page parsing logic.
-- Treat privacy and account safety as first-class constraints.
+## 使用方式
+
+### 面板功能
+
+腳本啟動後，頁面右上角會出現控制面板，主要功能如下：
+
+- `包含關鍵字`
+  設定要通知的關鍵字規則。
+- `?`
+  顯示包含 / 排除關鍵字的輸入規則與範例。
+- `排除關鍵字`
+  設定不要通知的關鍵字規則。
+- `查看紀錄`
+  查看最近符合關鍵字且已通知的紀錄。
+- `設定`
+  調整刷新秒數、自動載入更多貼文與 `ntfy topic`。
+- `儲存`
+  儲存包含與排除關鍵字，並立即重新掃描。
+- `暫停`
+  暫停或恢復監控。
+- `立即掃描`
+  清掉目前社團已看過的貼文記錄後重新掃描。
+- `除錯`
+  顯示目前掃描狀態、貼文抽取結果與通知狀態。
+
+### 關鍵字規則
+
+包含關鍵字與排除關鍵字都使用相同規則：
+
+- `;` 表示 OR
+- 空格表示 AND
+
+範例 1：
+
+```text
+4/4 熱區; 4/4 109; 4/4 117
+```
+
+代表只要出現以下任一條件就通知：
+
+- `4/4` 且 `熱區`
+- `4/4` 且 `109`
+- `4/4` 且 `117`
+
+範例 2：
+
+```text
+搖滾 6880;搖滾 5880
+```
+
+代表符合以下任一條件才通知：
+
+- `搖滾` 且 `6880`
+- `搖滾` 且 `5880`
+
+排除關鍵字則是在命中包含規則後，再把符合排除規則的貼文排除掉。
+
+### 預設關鍵字
+
+第一次安裝、且瀏覽器內尚未有任何已儲存設定時，腳本會預設填入：
+
+- `包含關鍵字`: `4/4 熱區; 4/4 109; 4/4 117`
+- `排除關鍵字`: `徵`
+
+如果之後你有自行修改並按下 `儲存`，後續刷新頁面時會優先使用你的自訂內容，不會自動被預設值覆蓋。
+
+## 通知方式
+
+### 電腦通知
+
+即使沒有設定 `ntfy`，腳本仍然可以透過 Tampermonkey 的 `GM_notification` 在電腦上直接發送通知。
+
+### ntfy 通知
+
+如果你希望出門在外時，手機也能同步收到提醒，可以額外設定 `ntfy`。
+
+`ntfy` 是一個簡單的推播服務。你可以在手機安裝 `ntfy` App，訂閱自己的 topic，之後腳本就會把符合條件的通知推送到該 topic。
+
+官方網站：
+
+- [`https://ntfy.sh/`](https://ntfy.sh/)
+
+### ntfy 設定步驟
+
+1. 在腳本面板中按 `設定`。
+2. 在 `ntfy topic` 欄位輸入你要使用的 topic，例如 `my-facebook-alerts`。
+3. 若只是要先測試 `ntfy`，可以直接按 `測試通知`。
+   這個按鈕會先儲存目前的 `ntfy topic`，但不會順便儲存其他刷新設定。
+4. 在手機上安裝 `ntfy` App。
+5. 打開 App，右上角'+'新增並訂閱和你剛才輸入完全相同的 topic。
+6. 回到 Facebook 頁面再次按 `測試通知`，確認手機是否有收到推播。
+7. 若刷新秒數或其他設定也要保存，再按 `儲存設定`。
+
+### 什麼情況下不會送出 ntfy
+
+- `ntfy topic` 是空白
+- `ntfy topic` 被清空後已重新儲存
+- `GM_xmlhttpRequest` 因網路或服務異常而失敗
+
+目前腳本的邏輯是：
+
+- `ntfy topic` 有值才會送出 `ntfy`
+- `ntfy topic` 是空的就不送
+- 清空 `ntfy topic` 後，不會沿用舊 topic 繼續偷偷發送
+
+## 設定說明
+
+### 啟用浮動刷新
+
+開啟後，腳本會在你設定的最小與最大秒數之間，隨機挑一個時間刷新。
+
+範例：
+
+- 最小刷新秒數：`25`
+- 最大刷新秒數：`35`
+
+代表每次刷新會落在 25 到 35 秒之間。
+
+### 固定刷新秒數
+
+當 `啟用浮動刷新` 關閉時，改用固定秒數刷新。
+
+### 自動載入更多貼文
+
+開啟後，腳本會在單次掃描中，透過保守捲動方式往下多抓幾個視窗的貼文，再累積去重，目標最多取得 5 篇唯一貼文。
+
+## 除錯面板
+
+按下 `除錯` 後可以看到：
+
+- 目前網址
+- 包含 / 排除關鍵字
+- 掃描原因
+- 是否為首次掃描
+- 自動載入嘗試次數
+- 視窗掃描次數
+- 貼文數變化
+- 累積候選貼文數
+- 累積解析貼文數
+- 累積唯一貼文數
+- 最終去重後貼文數
+- 最後通知狀態
+- 錯誤訊息
+- 每篇貼文的作者、時間、貼文 ID、命中規則與文字摘要
+
+如果掃描結果不如預期，建議優先查看這裡。
+
+## 去重與通知邏輯
+
+為了避免同一篇貼文重複通知，腳本會依序使用以下資訊判斷是否為同一篇貼文：
+
+1. `postId`
+2. `permalink`
+3. 作者 + 時間 + 文字簽名
+4. 最後才退回純文字簽名
+
+已看過的貼文會依社團分開存放在 `localStorage`，並保留最近 5 筆。符合關鍵字的通知紀錄則額外保留最近 10 筆。
+
+## 已知限制
+
+- Facebook DOM 結構可能變動，造成選擇器失效
+- 某些貼文類型可能抓不到穩定的 `postId` 或時間
+- 此腳本依賴你已登入 Facebook，且畫面能正常載入社團內容
+- 無法保證所有語系、所有社團版型都完全一致
+
+## 隱私與安全
+
+- 腳本在瀏覽器本地執行，不會把 Facebook 帳號資訊上傳到本專案
+- 設定與去重資料儲存在瀏覽器的 `localStorage`
+- 若有設定 `ntfy`，通知內容會送到你指定的 topic
+
+## 開發文件
+
+如果你想了解目前功能規格與任務拆解，可以參考：
+
+- [`docs/V1_SPEC.md`](./docs/V1_SPEC.md)
+- [`docs/TASK_BREAKDOWN.md`](./docs/TASK_BREAKDOWN.md)

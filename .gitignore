@@ -20,6 +20,8 @@ cache/
 *.local
 *.local.*
 secrets/
+AGENTS.md
+GIT_COMMIT_RULES.md
 
 # Browser automation artifacts
 playwright-report/

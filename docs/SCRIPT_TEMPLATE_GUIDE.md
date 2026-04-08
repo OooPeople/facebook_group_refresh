@@ -141,10 +141,14 @@
 可沿用內容：
 
 - `STORAGE_KEYS` 的設計方式
+- `CONFIG_FIELD_DEFINITIONS` / `CONFIG_GROUP_DEFINITIONS` 這種欄位定義 + group 定義分層
 - `DEFAULT_CONFIG` 的集中管理方式
+- `INTERNAL_CONFIG` 這種 internal-only 行為設定
 - `loadString()` / `loadBoolean()` / `loadJson()`
 - `saveString()` / `saveJson()`
 - `loadStoredRawValue()` / `saveStoredRawValue()`
+- `loadPersistedConfigField()` / `loadPersistedConfigGroup()`
+- `persistConfigFieldValue()` / `persistConfigGroup()`
 - 命名化 store registry 的概念
 - group-scoped store / named store 的概念
 
@@ -152,7 +156,15 @@
 
 - `STORAGE_KEYS`
 - `DEFAULT_CONFIG`
+- `CONFIG_FIELD_DEFINITIONS`
 - 是否需要保留 group-scoped store
+
+如果新腳本同時有「正式設定」與「不對外暴露的執行策略」，建議一開始就分成：
+
+- public config
+- internal config
+
+這樣像固定 load-more 策略、通知 hydration 細節、暫時停用但仍保留介面的欄位，就不會混進使用者可編輯設定。
 
 如果新網站不是「群組」概念，也可以把：
 
@@ -208,11 +220,12 @@
 
 可沿用內容：
 
-- 本地通知流程
+- 本地通知流程，例如 `GM_notification`
 - `ntfy`
 - Discord Webhook
 - `latestNotification` 更新方式
 - channel definitions / runner map / task 建立方式
+- `hydrateNotificationConfigFromStorage()` 這種「進入通知流程前先把 persisted config 同步回 runtime」的收斂入口
 
 多數網站腳本都不需要改這層，除非：
 
@@ -229,12 +242,19 @@
 - help modal
 - view state -> render HTML 的流程
 - debug copy button
+- `buildPanelRuntimeSnapshot()` / `getPanelViewState()` 這種先整理 view model 再 render 的做法
+- `uiRuntime.panelPosition` / `uiRuntime.panelDrag` 這種 UI-only runtime state
+- 僅允許標題列拖曳的 panel drag 結構
+- `normalizePanelPosition()` / `clampPanelPosition()` / `buildDraggedPanelPosition()` 這類位置 helper
+- 拖曳位置持久化，並在 panel 重建後重新套回位置
 
 這層通常只需調整：
 
 - 標題文字
 - 欄位標籤
 - status / debug 內容
+- 拖曳熱區與按鈕 / textarea / input 的事件邊界
+- viewport clamp 規則
 
 ### 4.7 Smoke Test 架構
 
@@ -244,6 +264,8 @@
 - `__FB_GROUP_REFRESH_TEST_MODE__`
 - `__FB_GROUP_REFRESH_TEST_HOOKS__`
 - Node `vm` 載入 userscript 的方式
+- 優先暴露純邏輯 helper，而不是直接測完整 DOM side effect
+- 讓 config / dedupe / notification formatting / panel position helper 都可單獨驗證
 
 目前這份模板也已驗證一種可直接沿用的 runtime 結構：
 
@@ -252,6 +274,8 @@
 - timer / observer / panel runtime 以 orchestration helper 統一收口
 - 正式設定優先透過 keyword / refresh / notification / monitoring / UI 的 use case helper 更新
 - 不對外開放的能力，例如固定 load-more 策略或 internal-only 通知能力，應降階成 internal config，而不是混進正式設定模型
+- session-only 狀態若需要 `Set` / `Map`，建議包成像 `isGroupInitialized()` / `markGroupInitialized()` 這類 helper 再由 orchestration 呼叫
+- UI 行為若有計算邏輯，例如 panel drag，也應拆出可測的純 helper
 
 這是這份模板很重要的部分，因為它讓：
 
@@ -789,8 +813,11 @@ Facebook 目前有：
   - 最後才用作者 / 時間 / 文字簽名 fallback
 - seen / history / latest notification 的持久化思路
 - panel / settings / debug / history modal 的互動分層
+- panel drag + persisted position 的 UI policy
 - smoke test 只測純邏輯與 policy，不硬測 DOM-heavy 行為
 - notifier 分成本地通知與 opt-in 遠端通知通道
+- public config 與 `INTERNAL_CONFIG` 分離
+- config hydration 與 session helper 的薄封裝
 
 ### 17.2 屬於 Facebook 專屬、通常必須重寫的 policy
 
@@ -838,6 +865,8 @@ Facebook 目前有：
    - dedupe
    - history
    - notifier
+   - config / internal-config 骨架
+   - panel position helper
    - smoke test 骨架
 2. 再重寫站點專屬 policy
    - page detection
@@ -845,5 +874,7 @@ Facebook 目前有：
    - top-post shortcut 是否存在
    - seen-stop 是否合理
 3. 最後才調整 UI 文字與通知內容
+
+如果新腳本暫時停用某個欄位或能力，也可以保留資料形狀與介面，但要在文件中明確標註目前是否啟用，避免讀者把「欄位仍存在」誤解成「功能仍在運作」。
 
 這樣做的好處是，新腳本會先站穩資料流與分層，再處理網站差異，而不是一開始就把所有東西一起改亂。

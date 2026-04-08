@@ -20,8 +20,10 @@ cache/
 *.local
 *.local.*
 secrets/
-AGENTS.md
-GIT_COMMIT_RULES.md
+
+# Internal-only notes
+chatgpt_review.md
+docs/TASK_BREAKDOWN.md
 
 # Browser automation artifacts
 playwright-report/

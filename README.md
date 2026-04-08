@@ -25,9 +25,15 @@
 facebook_group_refresh/
 ├─ src/
 │  └─ facebook_group_refresh.user.js
+├─ scripts/
+│  └─ smoke_check_userscript.js
 ├─ docs/
 │  ├─ V1_SPEC.md
+│  ├─ REFACTOR_PLAN.md
+│  ├─ SCRIPT_TEMPLATE_GUIDE.md
 │  └─ TASK_BREAKDOWN.md
+├─ AGENTS.md
+├─ GIT_COMMIT_RULES.md
 ├─ .editorconfig
 ├─ .gitignore
 └─ README.md
@@ -37,10 +43,20 @@ facebook_group_refresh/
 
 - `src/facebook_group_refresh.user.js`
   篡改猴腳本主程式。
+- `scripts/smoke_check_userscript.js`
+  最小 smoke test，用來檢查 userscript metadata 與穩定純邏輯。
 - `docs/V1_SPEC.md`
   功能規格與設計方向。
+- `docs/REFACTOR_PLAN.md`
+  重構盤點、完成項目與後續原則。
+- `docs/SCRIPT_TEMPLATE_GUIDE.md`
+  說明如何把這份腳本作為其他單站監視腳本模板。
 - `docs/TASK_BREAKDOWN.md`
   任務拆解與目前完成狀態。
+- `AGENTS.md`
+  這個 repo 的 agent / AI 協作規則。
+- `GIT_COMMIT_RULES.md`
+  Git commit message 規範。
 - `.editorconfig`
   編輯器格式設定。
 - `.gitignore`
@@ -225,6 +241,7 @@ https://www.facebook.com/groups/<group-id>/
 - 某些貼文類型可能抓不到穩定的 `postId`
 - 目前不提供貼文連結
 - 目前版本暫時停用貼文時間解析，避免把留言時間誤判成貼文時間
+- 當 Facebook 頁面被最小化、切到背景，或被其他視窗長時間覆蓋時，瀏覽器可能節流頁內 timer，導致刷新與自動捲動不一定可靠
 - 此腳本依賴你已登入 Facebook，且畫面能正常載入社團內容
 - 無法保證所有語系、所有社團版型都完全一致
 
@@ -239,4 +256,23 @@ https://www.facebook.com/groups/<group-id>/
 如果你想了解目前功能規格與任務拆解，可以參考：
 
 - [`docs/V1_SPEC.md`](./docs/V1_SPEC.md)
+- [`docs/REFACTOR_PLAN.md`](./docs/REFACTOR_PLAN.md)
+- [`docs/SCRIPT_TEMPLATE_GUIDE.md`](./docs/SCRIPT_TEMPLATE_GUIDE.md)
 - [`docs/TASK_BREAKDOWN.md`](./docs/TASK_BREAKDOWN.md)
+
+## 開發驗證
+
+目前 repo 已提供最小 smoke test。
+
+若本機已安裝 Node.js，可執行：
+
+```powershell
+& 'C:\Program Files\nodejs\node.exe' '.\scripts\smoke_check_userscript.js'
+```
+
+這個檢查主要會驗證：
+
+- userscript metadata 是否存在
+- 腳本是否可在 test mode 下載入
+- 關鍵字解析 / 比對
+- 去重 key 與通知文字格式化等穩定純邏輯

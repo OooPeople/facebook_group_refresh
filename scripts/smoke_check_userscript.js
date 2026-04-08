@@ -214,6 +214,35 @@ function runTests(hooks) {
     "Expected duplicate history entries to be replaced."
   );
 
+  const seenStopState = hooks.createSeenPostStopState({
+    enabled: true,
+    minNewPostsBeforeStop: 1,
+    consecutiveSeenThreshold: 3,
+  });
+  hooks.applySeenPostStopObservation(seenStopState, { postKey: "new-1", seen: false });
+  hooks.applySeenPostStopObservation(seenStopState, { postKey: "seen-1", seen: true });
+  hooks.applySeenPostStopObservation(seenStopState, { postKey: "seen-2", seen: true });
+  assert(seenStopState.triggered === false, "Expected seen-stop to remain inactive before threshold.");
+  hooks.applySeenPostStopObservation(seenStopState, { postKey: "seen-3", seen: true });
+  assert(seenStopState.triggered === true, "Expected seen-stop to trigger after three consecutive seen posts.");
+  assert(
+    seenStopState.stopReason.includes("已連續遇到 3 篇已看過貼文"),
+    "Expected seen-stop reason to mention the seen threshold."
+  );
+
+  const duplicateSeenStopState = hooks.createSeenPostStopState({
+    enabled: true,
+    minNewPostsBeforeStop: 1,
+    consecutiveSeenThreshold: 2,
+  });
+  hooks.applySeenPostStopObservation(duplicateSeenStopState, { postKey: "new-1", seen: false });
+  hooks.applySeenPostStopObservation(duplicateSeenStopState, { postKey: "seen-1", seen: true });
+  hooks.applySeenPostStopObservation(duplicateSeenStopState, { postKey: "seen-1", seen: true });
+  assert(
+    duplicateSeenStopState.consecutiveSeenCount === 1,
+    "Expected duplicate post keys to be ignored by seen-stop observation."
+  );
+
   const compactBody = hooks.buildCompactNotificationBody({
     author: "Alice",
     includeRule: "搖滾 6880",

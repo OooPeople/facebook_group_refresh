@@ -74,9 +74,29 @@
     candidateMultiplier: 6,
     seenPostMultiplier: 2,
     maxWindowMultiplier: 2,
+    minNewPostsBeforeSeenStop: 1,
+    consecutiveSeenStopCount: 3,
   };
 
   const FEED_SORT_LABELS = ["新貼文", "最相關", "最新動態"];
+  const GROUP_NAVIGATION_LABELS = [
+    "討論區",
+    "精選",
+    "關於",
+    "成員",
+    "媒體",
+    "檔案",
+    "活動",
+    "影片",
+    "reels",
+    "discussion",
+    "featured",
+    "about",
+    "members",
+    "media",
+    "files",
+    "events",
+  ];
   const SELECTORS = Object.freeze({
     feedRoots: [
       '[role="feed"]',
@@ -276,6 +296,40 @@
     saveNtfyTopicSetting(STATE.config.ntfyTopic);
     saveDiscordWebhookSetting(STATE.config.discordWebhook);
     saveString(STORAGE_KEYS.autoLoadMorePosts, String(STATE.config.autoLoadMorePosts));
+  }
+
+  // 讀取並正規化已保存的 ntfy topic。
+  function getPersistedNtfyTopic() {
+    return normalizeText(loadString(STORAGE_KEYS.ntfyTopic, DEFAULT_CONFIG.ntfyTopic));
+  }
+
+  // 保存 ntfy topic；空字串時直接移除設定。
+  function saveNtfyTopicSetting(value) {
+    const topic = normalizeText(value);
+    STATE.config.ntfyTopic = topic;
+
+    if (topic) {
+      saveString(STORAGE_KEYS.ntfyTopic, topic);
+    } else {
+      removeStorageKey(STORAGE_KEYS.ntfyTopic);
+    }
+  }
+
+  // 讀取並正規化已保存的 Discord Webhook URL。
+  function getPersistedDiscordWebhook() {
+    return normalizeText(loadString(STORAGE_KEYS.discordWebhook, DEFAULT_CONFIG.discordWebhook));
+  }
+
+  // 保存 Discord Webhook URL；空字串時直接移除設定。
+  function saveDiscordWebhookSetting(value) {
+    const webhook = normalizeText(value);
+    STATE.config.discordWebhook = webhook;
+
+    if (webhook) {
+      saveString(STORAGE_KEYS.discordWebhook, webhook);
+    } else {
+      removeStorageKey(STORAGE_KEYS.discordWebhook);
+    }
   }
 
   // 以字串形式讀取儲存值，讀不到時回傳預設值。
@@ -515,40 +569,6 @@
     return clampTargetPostCount(targetCount) * SCAN_LIMITS.seenPostMultiplier;
   }
 
-  // 讀取並正規化已保存的 ntfy topic。
-  function getPersistedNtfyTopic() {
-    return normalizeText(loadString(STORAGE_KEYS.ntfyTopic, DEFAULT_CONFIG.ntfyTopic));
-  }
-
-  // 保存 ntfy topic；空字串時直接移除設定。
-  function saveNtfyTopicSetting(value) {
-    const topic = normalizeText(value);
-    STATE.config.ntfyTopic = topic;
-
-    if (topic) {
-      saveString(STORAGE_KEYS.ntfyTopic, topic);
-    } else {
-      removeStorageKey(STORAGE_KEYS.ntfyTopic);
-    }
-  }
-
-  // 讀取並正規化已保存的 Discord Webhook URL。
-  function getPersistedDiscordWebhook() {
-    return normalizeText(loadString(STORAGE_KEYS.discordWebhook, DEFAULT_CONFIG.discordWebhook));
-  }
-
-  // 保存 Discord Webhook URL；空字串時直接移除設定。
-  function saveDiscordWebhookSetting(value) {
-    const webhook = normalizeText(value);
-    STATE.config.discordWebhook = webhook;
-
-    if (webhook) {
-      saveString(STORAGE_KEYS.discordWebhook, webhook);
-    } else {
-      removeStorageKey(STORAGE_KEYS.discordWebhook);
-    }
-  }
-
   // UI 文字輸出前做最基本的 HTML escape，避免 debug / history 面板插入未轉義內容。
   function escapeHtml(value) {
     return String(value || "")
@@ -560,36 +580,6 @@
   // 跳脫正則特殊字元，讓關鍵字可安全用於高亮比對。
   function escapeRegExp(value) {
     return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
-
-  // 使用者在面板輸入時，先更新記憶體中的草稿設定，不立刻寫入持久化儲存。
-  function persistDraftInputs() {
-    const panel = document.getElementById("fb-group-refresh-panel");
-    if (!panel) return;
-
-    const includeEl = panel.querySelector("#fbgr-include");
-    const excludeEl = panel.querySelector("#fbgr-exclude");
-    if (!includeEl || !excludeEl) return;
-
-    STATE.config.includeKeywords = normalizeText(includeEl.value);
-    STATE.config.excludeKeywords = normalizeText(excludeEl.value);
-  }
-
-  // 判斷 include / exclude 文字是否與已儲存值不同，用於顯示未儲存提示。
-  function hasUnsavedKeywordChanges() {
-    const panel = document.getElementById("fb-group-refresh-panel");
-    if (!panel) return false;
-
-    const includeEl = panel.querySelector("#fbgr-include");
-    const excludeEl = panel.querySelector("#fbgr-exclude");
-    if (!includeEl || !excludeEl) return false;
-
-    const currentInclude = normalizeText(includeEl.value);
-    const currentExclude = normalizeText(excludeEl.value);
-    const savedInclude = loadString(STORAGE_KEYS.include, DEFAULT_CONFIG.includeKeywords);
-    const savedExclude = loadString(STORAGE_KEYS.exclude, DEFAULT_CONFIG.excludeKeywords);
-
-    return currentInclude !== savedInclude || currentExclude !== savedExclude;
   }
 
   // 將長文字裁切成固定長度，避免通知或 debug 面板過長。
@@ -639,6 +629,55 @@
   }
 
   // ==========================================================================
+  // Matcher / Rules
+  // ==========================================================================
+
+  // 將單一關鍵字規則整理成標準格式。
+  function buildKeywordRule(rule) {
+    const normalizedRule = normalizeText(rule);
+    if (!normalizedRule) return null;
+
+    const terms = normalizedRule
+      .split(" ")
+      .map((part) => normalizeForMatch(part))
+      .filter(Boolean);
+    if (!terms.length) return null;
+
+    return {
+      raw: normalizedRule,
+      terms,
+    };
+  }
+
+  // 將 `a b;c` 這類輸入拆成規則陣列；分號代表 OR、空白代表 AND。
+  function parseKeywordInput(rawInput) {
+    return String(rawInput || "")
+      .split(";")
+      .map((rule) => buildKeywordRule(rule))
+      .filter(Boolean);
+  }
+
+  // 檢查單一關鍵字規則是否命中指定文字。
+  function matchesKeywordRule(rule, normalizedText) {
+    return Boolean(rule && rule.terms.every((term) => normalizedText.includes(term)));
+  }
+
+  // 逐條規則比對，任一規則成立就視為命中。
+  function matchRules(rules, normalizedText) {
+    if (!rules.length) {
+      return { matched: true, rule: "" };
+    }
+
+    for (const rule of rules) {
+      if (matchesKeywordRule(rule, normalizedText)) {
+        return { matched: true, rule: rule.raw };
+      }
+    }
+
+    return { matched: false, rule: "" };
+  }
+
+  // ==========================================================================
   // Page Context / Scheduling
   // ==========================================================================
 
@@ -662,6 +701,11 @@
 
     const groupId = getCurrentGroupId();
     const exactPath = `/groups/${groupId}`;
+    const headingName = getCurrentGroupNameFromHeading();
+    if (headingName) {
+      return headingName;
+    }
+
     const candidates = [];
     const anchors = document.querySelectorAll(`a[href*="/groups/${groupId}"]`);
 
@@ -670,6 +714,7 @@
 
       const text = normalizeText(anchor.innerText || anchor.textContent || "");
       if (!text || text.length < 2 || text.length > 120) continue;
+      if (isLikelyGroupNavigationAnchor(anchor, text)) continue;
 
       let pathname = "";
       try {
@@ -712,6 +757,56 @@
     }
 
     return "";
+  }
+
+  // 判斷文字是否比較像社團頁籤或導覽按鈕，而不是社團名稱。
+  function isLikelyGroupNavigationLabel(value) {
+    const normalized = normalizeForMatch(value);
+    return Boolean(normalized && GROUP_NAVIGATION_LABELS.includes(normalized));
+  }
+
+  // 排除社團導覽 tab / 固定頁籤，避免誤把「討論區」等文字當成社團名稱。
+  function isLikelyGroupNavigationAnchor(anchor, text) {
+    if (!(anchor instanceof HTMLAnchorElement)) return false;
+    if (anchor.getAttribute("role") === "tab") return true;
+    if (anchor.getAttribute("aria-selected") === "true") return true;
+
+    const anchorId = normalizeForMatch(anchor.id || "");
+    if (anchorId === "posts") return true;
+
+    return isLikelyGroupNavigationLabel(text);
+  }
+
+  // 優先從頁面主要 heading 區找社團名稱，降低誤抓作者名稱或導覽 label 的機率。
+  function getCurrentGroupNameFromHeading() {
+    const selectors = [
+      '[role="main"] h1 span[dir="auto"]',
+      '[role="main"] h1',
+      "h1 span[dir='auto']",
+      "h1",
+    ];
+    const candidates = [];
+
+    for (const selector of selectors) {
+      const nodes = document.querySelectorAll(selector);
+      for (const node of nodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (!isVisibleElement(node)) continue;
+
+        const text = normalizeText(node.innerText || node.textContent || "");
+        if (!text || text.length < 2 || text.length > 120) continue;
+        if (isLikelyGroupNavigationLabel(text)) continue;
+
+        candidates.push(text);
+      }
+
+      if (candidates.length) {
+        break;
+      }
+    }
+
+    candidates.sort((a, b) => b.length - a.length);
+    return candidates[0] || "";
   }
 
   // 嘗試從頁面控制列辨識目前動態牆排序，用於提醒使用者是否在偏好的排序模式。
@@ -763,52 +858,6 @@
     }
 
     return "";
-  }
-
-  // 關鍵字規則解析與刷新排程控制。
-  // 將單一關鍵字規則整理成標準格式。
-  function buildKeywordRule(rule) {
-    const normalizedRule = normalizeText(rule);
-    if (!normalizedRule) return null;
-
-    const terms = normalizedRule
-      .split(" ")
-      .map((part) => normalizeForMatch(part))
-      .filter(Boolean);
-    if (!terms.length) return null;
-
-    return {
-      raw: normalizedRule,
-      terms,
-    };
-  }
-
-  // 將 `a b;c` 這類輸入拆成規則陣列；分號代表 OR、空白代表 AND。
-  function parseKeywordInput(rawInput) {
-    return String(rawInput || "")
-      .split(";")
-      .map((rule) => buildKeywordRule(rule))
-      .filter(Boolean);
-  }
-
-  // 檢查單一關鍵字規則是否命中指定文字。
-  function matchesKeywordRule(rule, normalizedText) {
-    return Boolean(rule && rule.terms.every((term) => normalizedText.includes(term)));
-  }
-
-  // 逐條規則比對，任一規則成立就視為命中。
-  function matchRules(rules, normalizedText) {
-    if (!rules.length) {
-      return { matched: true, rule: "" };
-    }
-
-    for (const rule of rules) {
-      if (matchesKeywordRule(rule, normalizedText)) {
-        return { matched: true, rule: rule.raw };
-      }
-    }
-
-    return { matched: false, rule: "" };
   }
 
   // 根據固定秒數或 jitter 範圍，算出下一次 refresh 秒數。
@@ -1637,95 +1686,6 @@
     return buildRemoteNotificationLines(fields).join("\n");
   }
 
-  // Experimental / internal-only: browser-native 通知路徑仍保留在程式內，
-  // 但目前沒有對外暴露成設定視窗中的正式選項。
-  // 若啟用原生桌面通知，主動請求權限或回報目前權限狀態。
-  async function requestBrowserNotificationPermission() {
-    try {
-      if (!("Notification" in window)) return "unsupported";
-      if (Notification.permission === "granted") return "granted";
-      if (Notification.permission === "denied") return "denied";
-      return await Notification.requestPermission();
-    } catch (error) {
-      return "error";
-    }
-  }
-
-  // 透過 ntfy topic 傳送遠端通知；未設定 topic 時直接跳過。
-  function sendNtfyNotification({ title, body, clickUrl }) {
-    const topic = getPersistedNtfyTopic();
-    STATE.config.ntfyTopic = topic;
-    if (!topic) {
-      return Promise.resolve("ntfy_skipped");
-    }
-
-    return new Promise((resolve) => {
-      try {
-        GM_xmlhttpRequest({
-          method: "POST",
-          url: `https://ntfy.sh/${encodeURIComponent(topic)}`,
-          data: body,
-          headers: {
-            "Content-Type": "text/plain; charset=utf-8",
-            Title: title,
-            Priority: "default",
-            Tags: "bell",
-            ...(clickUrl ? { Click: clickUrl } : {}),
-          },
-          onload: (response) => {
-            if (response.status >= 200 && response.status < 300) {
-              resolve("ntfy_sent");
-              return;
-            }
-            resolve(`ntfy_failed:${response.status}`);
-          },
-          onerror: () => resolve("ntfy_failed"),
-          ontimeout: () => resolve("ntfy_timeout"),
-        });
-      } catch (error) {
-        resolve("ntfy_failed");
-      }
-    });
-  }
-
-  // 透過 Discord Webhook 傳送遠端通知；未設定 URL 時直接跳過。
-  function sendDiscordWebhookNotification({ title, body, clickUrl }) {
-    const webhook = getPersistedDiscordWebhook();
-    STATE.config.discordWebhook = webhook;
-    if (!webhook) {
-      return Promise.resolve("discord_skipped");
-    }
-
-    const content = truncate(
-      [title, body, clickUrl].filter(Boolean).join("\n"),
-      1900
-    );
-
-    return new Promise((resolve) => {
-      try {
-        GM_xmlhttpRequest({
-          method: "POST",
-          url: webhook,
-          data: JSON.stringify({ content }),
-          headers: {
-            "Content-Type": "application/json; charset=utf-8",
-          },
-          onload: (response) => {
-            if (response.status >= 200 && response.status < 300) {
-              resolve("discord_sent");
-              return;
-            }
-            resolve(`discord_failed:${response.status}`);
-          },
-          onerror: () => resolve("discord_failed"),
-          ontimeout: () => resolve("discord_timeout"),
-        });
-      } catch (error) {
-        resolve("discord_failed");
-      }
-    });
-  }
-
   // ==========================================================================
   // Persistence / Dedupe / History
   // ==========================================================================
@@ -1866,6 +1826,11 @@
     }
 
     return results.slice(0, limit);
+  }
+
+  // 對抽出的貼文再次去重，避免多個 selector 命中同一篇貼文。
+  function dedupeExtractedPosts(posts, limit = STATE.config.maxPostsPerScan) {
+    return collectUniquePostsByKey(posts, limit);
   }
 
   // 讀取「已看過貼文」儲存區。
@@ -2157,7 +2122,7 @@
   }
 
   // 將候選容器批次抽成貼文，並統計快取命中、空文字、非貼文等過濾資訊。
-  async function collectPostsFromCandidates(candidates, scanCache = null) {
+  async function collectPostsFromCandidates(candidates, scanCache = null, seenStopContext = null) {
     const posts = [];
     const meta = {
       cacheHitCount: 0,
@@ -2211,17 +2176,24 @@
       }
 
       posts.push(post);
+
+      const seenStopReason = inspectPostForSeenStop(seenStopContext, post);
+      if (seenStopReason) {
+        meta.stopReason = seenStopReason;
+        break;
+      }
     }
 
     return { posts, meta };
   }
 
   // 建立跨視窗掃描的執行期上下文。
-  function createWindowCollectionContext(targetPostCount) {
+  function createWindowCollectionContext(targetPostCount, groupId) {
     const result = normalizeCollectedMeta({
       targetCount: targetPostCount,
       maxWindowCount: STATE.config.autoLoadMorePosts ? getDynamicMaxWindows(targetPostCount) : 1,
     });
+    const seenStopContext = createSeenPostStopContext(groupId);
 
     return {
       targetPostCount,
@@ -2231,13 +2203,14 @@
       scanCache: new WeakMap(),
       maxWindows: result.maxWindowCount,
       stagnantWindows: 0,
+      seenStopContext,
     };
   }
 
   // 針對目前畫面視窗收集候選、抽取貼文並完成單視窗去重。
-  async function collectCurrentWindowPosts(targetPostCount, scanCache) {
+  async function collectCurrentWindowPosts(targetPostCount, scanCache, seenStopContext) {
     const candidates = collectPostContainers(getCandidateCollectionLimit(targetPostCount));
-    const collected = await collectPostsFromCandidates(candidates, scanCache);
+    const collected = await collectPostsFromCandidates(candidates, scanCache, seenStopContext);
     const posts = dedupeExtractedPosts(collected.posts, Number.MAX_SAFE_INTEGER);
 
     return {
@@ -2278,7 +2251,10 @@
   }
 
   // 依目前狀態判斷是否應停止跨視窗掃描。
-  function getWindowCollectionStopReason(accumulatedCount, targetPostCount) {
+  function getWindowCollectionStopReason(accumulatedCount, targetPostCount, collected) {
+    if (collected?.meta?.stopReason) {
+      return collected.meta.stopReason;
+    }
     if (accumulatedCount >= targetPostCount) {
       return "已達目標貼文數";
     }
@@ -2321,10 +2297,10 @@
 
   // 若上一輪仍在載入更多貼文，改成只吃當前視窗，避免多個掃描流程互搶。
   async function collectCurrentWindowOnlyResult(context, initialCandidates) {
-    const { result, scanCache, targetPostCount } = context;
+    const { result, scanCache, targetPostCount, seenStopContext } = context;
 
     result.stopReason = "目前正在載入更多貼文，先使用當前視窗結果";
-    const initialCollected = await collectPostsFromCandidates(initialCandidates, scanCache);
+    const initialCollected = await collectPostsFromCandidates(initialCandidates, scanCache, seenStopContext);
     accumulateCollectedMetaCounts(result, initialCollected.meta);
     const initialPosts = dedupeExtractedPosts(initialCollected.posts, targetPostCount);
 
@@ -2440,8 +2416,11 @@
   }
 
   // 在當前視窗與後續滾動視窗中累積貼文，直到足夠或達到保守上限。
-  async function collectPostsAcrossWindows() {
-    const context = createWindowCollectionContext(clampTargetPostCount(STATE.config.maxPostsPerScan));
+  async function collectPostsAcrossWindows(groupId) {
+    const context = createWindowCollectionContext(
+      clampTargetPostCount(STATE.config.maxPostsPerScan),
+      groupId
+    );
     const {
       targetPostCount,
       result,
@@ -2449,6 +2428,7 @@
       accumulatedKeys,
       scanCache,
       maxWindows,
+      seenStopContext,
     } = context;
     const initialCandidates = collectPostContainers(getCandidateCollectionLimit(targetPostCount));
     result.beforeCount = initialCandidates.length;
@@ -2465,7 +2445,11 @@
     try {
       for (let windowIndex = 0; windowIndex < maxWindows; windowIndex += 1) {
         // 每個 window 代表「目前畫面可見範圍」的一次候選收集。
-        const { candidates, collected, posts } = await collectCurrentWindowPosts(targetPostCount, scanCache);
+        const { candidates, collected, posts } = await collectCurrentWindowPosts(
+          targetPostCount,
+          scanCache,
+          seenStopContext
+        );
         const addedThisWindow = mergeWindowPostsIntoAccumulated(
           accumulated,
           accumulatedKeys,
@@ -2490,7 +2474,7 @@
           context.stagnantWindows
         );
 
-        result.stopReason = getWindowCollectionStopReason(accumulated.length, targetPostCount);
+        result.stopReason = getWindowCollectionStopReason(accumulated.length, targetPostCount, collected);
         if (result.stopReason) {
           break;
         }
@@ -2632,7 +2616,7 @@
     let collectedResult = createEmptyCollectedResult();
     if (supported) {
       const shortcutResult = await collectPostsWithTopPostShortcut(reason, groupId);
-      collectedResult = shortcutResult || await collectPostsAcrossWindows();
+      collectedResult = shortcutResult || await collectPostsAcrossWindows(groupId);
     }
 
     const uniquePosts = collectedResult.posts;
@@ -2692,6 +2676,88 @@
       summaries,
       matchesToNotify,
     };
+  }
+
+  // 建立「已看過貼文提前停止」的純邏輯狀態。
+  function createSeenPostStopState(options = {}) {
+    const {
+      enabled = false,
+      minNewPostsBeforeStop = SCAN_LIMITS.minNewPostsBeforeSeenStop,
+      consecutiveSeenThreshold = SCAN_LIMITS.consecutiveSeenStopCount,
+    } = options;
+
+    return {
+      enabled,
+      minNewPostsBeforeStop,
+      consecutiveSeenThreshold,
+      newPostCount: 0,
+      consecutiveSeenCount: 0,
+      processedKeys: new Set(),
+      triggered: false,
+      stopReason: "",
+    };
+  }
+
+  // 將單筆唯一貼文的 seen 狀態套入停止策略，必要時標記提早停止。
+  function applySeenPostStopObservation(state, observation) {
+    if (!state?.enabled || state.triggered || !observation) {
+      return state;
+    }
+
+    const { postKey = "", seen = false } = observation;
+    if (!postKey || state.processedKeys.has(postKey)) {
+      return state;
+    }
+
+    state.processedKeys.add(postKey);
+
+    if (!seen) {
+      state.newPostCount += 1;
+      state.consecutiveSeenCount = 0;
+      return state;
+    }
+
+    if (state.newPostCount < state.minNewPostsBeforeStop) {
+      return state;
+    }
+
+    state.consecutiveSeenCount += 1;
+    if (state.consecutiveSeenCount < state.consecutiveSeenThreshold) {
+      return state;
+    }
+
+    state.triggered = true;
+    state.stopReason = `已連續遇到 ${state.consecutiveSeenThreshold} 篇已看過貼文，停止深度掃描`;
+    return state;
+  }
+
+  // 只有在「新貼文」排序且已有 seen 紀錄時，才啟用保守的 seen-stop 深掃捷徑。
+  function shouldUseSeenPostStop(groupId) {
+    if (!groupId) return false;
+    if (getCurrentFeedSortLabel() !== "新貼文") return false;
+    return Object.keys(getSeenPostGroupStore(groupId, getSeenPostsStore())).length > 0;
+  }
+
+  // 建立掃描期的 seen-stop context，供候選抽取與跨視窗停止判斷共用。
+  function createSeenPostStopContext(groupId) {
+    return {
+      groupId,
+      state: createSeenPostStopState({
+        enabled: shouldUseSeenPostStop(groupId),
+      }),
+    };
+  }
+
+  // 觀察單篇貼文是否已看過，並更新目前這輪掃描的 seen-stop 狀態。
+  function inspectPostForSeenStop(context, post) {
+    if (!context?.state?.enabled || !post) {
+      return "";
+    }
+
+    const postKey = getPostKey(post);
+    const seen = hasSeenPost(context.groupId, post);
+    applySeenPostStopObservation(context.state, { postKey, seen });
+    return context.state.stopReason;
   }
 
   // 依序發送本輪新命中的通知，並立即把已通知 key 納入 seen。
@@ -2898,11 +2964,6 @@
     }
   }
 
-  // 對抽出的貼文再次去重，避免多個 selector 命中同一篇貼文。
-  function dedupeExtractedPosts(posts, limit = STATE.config.maxPostsPerScan) {
-    return collectUniquePostsByKey(posts, limit);
-  }
-
   // ==========================================================================
   // Notifier
   // ==========================================================================
@@ -2959,6 +3020,95 @@
     } catch (error) {
       return "browser_failed";
     }
+  }
+
+  // Experimental / internal-only: browser-native 通知路徑仍保留在程式內，
+  // 但目前沒有對外暴露成設定視窗中的正式選項。
+  // 若啟用原生桌面通知，主動請求權限或回報目前權限狀態。
+  async function requestBrowserNotificationPermission() {
+    try {
+      if (!("Notification" in window)) return "unsupported";
+      if (Notification.permission === "granted") return "granted";
+      if (Notification.permission === "denied") return "denied";
+      return await Notification.requestPermission();
+    } catch (error) {
+      return "error";
+    }
+  }
+
+  // 透過 ntfy topic 傳送遠端通知；未設定 topic 時直接跳過。
+  function sendNtfyNotification({ title, body, clickUrl }) {
+    const topic = getPersistedNtfyTopic();
+    STATE.config.ntfyTopic = topic;
+    if (!topic) {
+      return Promise.resolve("ntfy_skipped");
+    }
+
+    return new Promise((resolve) => {
+      try {
+        GM_xmlhttpRequest({
+          method: "POST",
+          url: `https://ntfy.sh/${encodeURIComponent(topic)}`,
+          data: body,
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            Title: title,
+            Priority: "default",
+            Tags: "bell",
+            ...(clickUrl ? { Click: clickUrl } : {}),
+          },
+          onload: (response) => {
+            if (response.status >= 200 && response.status < 300) {
+              resolve("ntfy_sent");
+              return;
+            }
+            resolve(`ntfy_failed:${response.status}`);
+          },
+          onerror: () => resolve("ntfy_failed"),
+          ontimeout: () => resolve("ntfy_timeout"),
+        });
+      } catch (error) {
+        resolve("ntfy_failed");
+      }
+    });
+  }
+
+  // 透過 Discord Webhook 傳送遠端通知；未設定 URL 時直接跳過。
+  function sendDiscordWebhookNotification({ title, body, clickUrl }) {
+    const webhook = getPersistedDiscordWebhook();
+    STATE.config.discordWebhook = webhook;
+    if (!webhook) {
+      return Promise.resolve("discord_skipped");
+    }
+
+    const content = truncate(
+      [title, body, clickUrl].filter(Boolean).join("\n"),
+      1900
+    );
+
+    return new Promise((resolve) => {
+      try {
+        GM_xmlhttpRequest({
+          method: "POST",
+          url: webhook,
+          data: JSON.stringify({ content }),
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+          },
+          onload: (response) => {
+            if (response.status >= 200 && response.status < 300) {
+              resolve("discord_sent");
+              return;
+            }
+            resolve(`discord_failed:${response.status}`);
+          },
+          onerror: () => resolve("discord_failed"),
+          ontimeout: () => resolve("discord_timeout"),
+        });
+      } catch (error) {
+        resolve("discord_failed");
+      }
+    });
   }
 
   // 只有實際送出或失敗的通道結果才加入狀態摘要。
@@ -3562,6 +3712,36 @@
   }
 
   // UI: 主控制面板建立與互動事件綁定。
+  // 使用者在面板輸入時，先更新記憶體中的草稿設定，不立刻寫入持久化儲存。
+  function persistDraftInputs() {
+    const panel = document.getElementById("fb-group-refresh-panel");
+    if (!panel) return;
+
+    const includeEl = panel.querySelector("#fbgr-include");
+    const excludeEl = panel.querySelector("#fbgr-exclude");
+    if (!includeEl || !excludeEl) return;
+
+    STATE.config.includeKeywords = normalizeText(includeEl.value);
+    STATE.config.excludeKeywords = normalizeText(excludeEl.value);
+  }
+
+  // 判斷 include / exclude 文字是否與已儲存值不同，用於顯示未儲存提示。
+  function hasUnsavedKeywordChanges() {
+    const panel = document.getElementById("fb-group-refresh-panel");
+    if (!panel) return false;
+
+    const includeEl = panel.querySelector("#fbgr-include");
+    const excludeEl = panel.querySelector("#fbgr-exclude");
+    if (!includeEl || !excludeEl) return false;
+
+    const currentInclude = normalizeText(includeEl.value);
+    const currentExclude = normalizeText(excludeEl.value);
+    const savedInclude = loadString(STORAGE_KEYS.include, DEFAULT_CONFIG.includeKeywords);
+    const savedExclude = loadString(STORAGE_KEYS.exclude, DEFAULT_CONFIG.excludeKeywords);
+
+    return currentInclude !== savedInclude || currentExclude !== savedExclude;
+  }
+
   // 將主面板目前輸入的 include / exclude 草稿寫回設定與 storage。
   function savePanelKeywordSettings(panelRefs) {
     if (!panelRefs) return;
@@ -4329,6 +4509,8 @@
       normalizeForMatch,
       parseKeywordInput,
       matchRules,
+      createSeenPostStopState,
+      applySeenPostStopObservation,
       buildPostKeyFragments,
       buildCompositePostKey,
       getPostKey,

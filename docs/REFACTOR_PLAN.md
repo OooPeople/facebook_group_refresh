@@ -113,6 +113,7 @@
 - 單檔模組區塊也已整理成較明確的區段：
   - `Storage / Config`
   - `Text / Common Utils`
+  - `Matcher / Rules`
   - `Page Context / Scheduling`
   - `Extractor / DOM Collection`
   - `Post Parsing / Notification Formatting`
@@ -127,7 +128,7 @@
 
 目前效果：
 
-- 單檔內部已開始用明確的區塊分段整理成 `Storage / Config`、`Text / Common Utils`、`Page Context / Scheduling`、`Extractor / DOM Collection`、`Post Parsing / Notification Formatting`、`Persistence / Dedupe / History`、`Scan Engine`、`Notifier`、`UI / Modal`、`Lifecycle / Observer`，閱讀路徑更接近模組化應用。
+- 單檔內部已開始用明確的區塊分段整理成 `Storage / Config`、`Text / Common Utils`、`Matcher / Rules`、`Page Context / Scheduling`、`Extractor / DOM Collection`、`Post Parsing / Notification Formatting`、`Persistence / Dedupe / History`、`Scan Engine`、`Notifier`、`UI / Modal`、`Lifecycle / Observer`，閱讀路徑更接近模組化應用。
 - `runScan()` 比較像流程協調器，而不是把掃描、比對、通知、state 寫回全塞在同一層。
 - `runScan()` 也開始把「建立掃描 context」、「執行 scan data pipeline」、「套用成功狀態」、「錯誤收尾」明確分層，主流程責任比前一階段更薄。
 - `latestScan` 與 panel / debug 共用的 scan summary 形狀更一致。

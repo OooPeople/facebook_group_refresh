@@ -39,6 +39,13 @@
     lastNotification: "fb_group_refresh_last_notification",
     refreshRange: "fb_group_refresh_refresh_range",
   };
+  const STORE_DEFINITIONS = Object.freeze({
+    latestTopPosts: { key: STORAGE_KEYS.latestTopPosts, type: "object" },
+    latestScanPosts: { key: STORAGE_KEYS.latestScanPosts, type: "object" },
+    seenPosts: { key: STORAGE_KEYS.seenPosts, type: "object" },
+    matchHistory: { key: STORAGE_KEYS.matchHistory, type: "json" },
+    lastNotification: { key: STORAGE_KEYS.lastNotification, type: "json" },
+  });
 
   const DEFAULT_CONFIG = {
     includeKeywords: "4/4 熱區; 4/4 109; 4/4 117",
@@ -70,7 +77,130 @@
   };
 
   const FEED_SORT_LABELS = ["新貼文", "最相關", "最新動態"];
+  const SELECTORS = Object.freeze({
+    feedRoots: [
+      '[role="feed"]',
+      'div[data-pagelet*="GroupsFeed"]',
+      'div[data-pagelet*="FeedUnit"]',
+    ],
+    postTextExpanderCandidates: [
+      'div[role="button"]',
+      'span[role="button"]',
+      'a[role="button"]',
+      "button",
+    ],
+    postContainerCandidates: [
+      '[role="feed"] [role="article"]',
+      '[role="feed"] > div',
+      'div[data-pagelet*="FeedUnit"]',
+      'div[data-pagelet*="GroupsFeed"] [role="article"]',
+      '[aria-posinset]',
+    ],
+    postPermalinkAnchors:
+      'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="]',
+    postStoryMessage:
+      'div[data-ad-comet-preview="message"], div[data-ad-preview="message"], [data-ad-rendering-role="story_message"]',
+    postIdSourceNodes:
+      'a[href], [data-ft], [data-store], [ajaxify], [id], [href], [aria-label], [aria-labelledby], [aria-describedby], [data-testid], [data-pagelet]',
+    timestampCandidates: [
+      'a[href*="/groups/"][href*="/posts/"]',
+      'a[href*="/permalink/"]',
+      'a[href*="multi_permalinks="]',
+      'a[href*="story_fbid="]',
+      "a[aria-label]",
+      "span[aria-label]",
+      "time",
+      "[datetime]",
+      "[data-utime]",
+    ],
+    authorCandidates: [
+      "h2 span",
+      "h3 span",
+      'a[role="link"] span[dir="auto"]',
+      "strong span",
+    ],
+    primaryPostText: [
+      'div[data-ad-comet-preview="message"]',
+      'div[data-ad-preview="message"]',
+      '[data-ad-rendering-role="story_message"]',
+    ],
+    fallbackPostText: [
+      'div[dir="auto"]',
+      'span[dir="auto"]',
+    ],
+  });
+  const TEXT_PATTERNS = Object.freeze({
+    postTextExpanderLabels: ["顯示更多", "查看更多", "See more"],
+    noisyTextFragments: [
+      "Facebook",
+      "貼文的相片",
+      "顯示更多",
+      "查看更多",
+      "See more",
+      "Most relevant",
+      "Like",
+      "Comment",
+      "Share",
+    ],
+  });
+  const REGEX_PATTERNS = Object.freeze({
+    postId: [
+      /\/posts\/(\d+)/i,
+      /\/permalink\/(\d+)/i,
+      /multi_permalinks=(\d+)/i,
+      /story_fbid=(\d+)/i,
+      /[?&]set=pcb\.(\d+)/i,
+      /\bpcb\.(\d+)/i,
+      /ft_ent_identifier=(\d+)/i,
+      /\bpost[_-]?id["'=:\s]+(\d{8,})/i,
+      /\btop_level_post_id["'=:\s]+(\d{8,})/i,
+      /\bmf_story_key["'=:\s]+(\d{8,})/i,
+      /\bstoryid["'=:\s]+(\d{8,})/i,
+      /\bfeedback_target_id["'=:\s]+(\d{8,})/i,
+      /\btargetfbid["'=:\s]+(\d{8,})/i,
+      /\bshare_fbid["'=:\s]+(\d{8,})/i,
+      /\bfbid["'=:\s]+(\d{8,})/i,
+      /"top_level_post_id":"?(\d+)/i,
+      /"mf_story_key":"?(\d+)/i,
+      /"storyID":"?(\d+)/i,
+      /\/posts\/pcb\.(\d+)/i,
+    ],
+    timestampLoose: [
+      /(\d{1,2}月\d{1,2}日(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
+      /(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
+      /((?:今天|今日|昨天)(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
+      /(\d+\s*(?:秒|分|分鐘|小時|天|週|周|月|年))/i,
+      /(\d+\s*(?:hrs?|mins?|min|hour|hours|day|days|week|weeks|month|months|year|years))/i,
+      /(剛剛|昨天|今日|今天)/i,
+    ],
+    timestampSafe: [
+      /(\d{1,2}\s*\u6708\s*\d{1,2}\s*\u65e5(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
+      /(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
+      /((?:\u4eca\u5929|\u4eca\u65e5|\u6628\u5929)(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
+      /(\d+\s*(?:\u79d2|\u5206(?:\u9418)?|\u5c0f\u6642|\u5929|\u9031|\u5468|\u6708|\u5e74))/i,
+      /(\d+\s*(?:hrs?|mins?|min|hour|hours|day|days|week|weeks|month|months|year|years))/i,
+      /(\u525b\u525b|\u6628\u5929|\u4eca\u65e5|\u4eca\u5929)/i,
+    ],
+    cleanedTextNoise: [
+      /\b[a-z0-9]{12,}\.com\b/gi,
+      /\bsnproSet[a-z0-9]+\b/gi,
+      /\bsotoeSrdpn[a-z0-9]+\b/gi,
+    ],
+    authorFollowSuffix: /\s*[·•]\s*追蹤\s*$/u,
+    authorUiLabels: /^(Like|Comment|Share|Most relevant)$/i,
+  });
   const ROUTE_SETTLE_MS = 3000;
+  const FEATURE_STATUS = Object.freeze({
+    permalinkExtraction: "disabled",
+    timestampExtraction: "disabled",
+    browserNotificationSetting: "internal_only",
+  });
+  const NOTIFICATION_CHANNEL_DEFINITIONS = Object.freeze([
+    { id: "gmDesktop", skippedStatus: "" },
+    { id: "browserDesktop", skippedStatus: "" },
+    { id: "ntfy", skippedStatus: "ntfy_skipped" },
+    { id: "discord", skippedStatus: "discord_skipped" },
+  ]);
 
   const STATE = {
     config: loadConfig(),
@@ -78,7 +208,7 @@
     latestScan: null,
     latestPosts: [],
     latestError: "",
-    latestNotification: loadJson(STORAGE_KEYS.lastNotification, null),
+    latestNotification: getLatestNotificationStore(),
     observer: null,
     scanTimer: null,
     refreshTimer: null,
@@ -93,10 +223,42 @@
     isLoadingMorePosts: false,
   };
 
+  // ==========================================================================
+  // Storage / Config
+  // ==========================================================================
+
   // 設定載入與儲存包裝，統一處理 Tampermonkey storage / legacy localStorage。
+  // 將 refresh 相關持久化欄位轉成 config override，集中舊格式相容邏輯。
+  function loadRefreshConfigOverrides() {
+    const refreshRange = loadJson(STORAGE_KEYS.refreshRange, null);
+    return {
+      minRefreshSec: refreshRange?.min ?? DEFAULT_CONFIG.minRefreshSec,
+      maxRefreshSec: refreshRange?.max ?? DEFAULT_CONFIG.maxRefreshSec,
+      jitterEnabled: refreshRange?.jitterEnabled ?? DEFAULT_CONFIG.jitterEnabled,
+      fixedRefreshSec: refreshRange?.fixedSec ?? DEFAULT_CONFIG.fixedRefreshSec,
+      maxPostsPerScan: clampTargetPostCount(refreshRange?.maxPostsPerScan ?? DEFAULT_CONFIG.maxPostsPerScan),
+      autoLoadMorePosts: loadBoolean(
+        STORAGE_KEYS.autoLoadMorePosts,
+        refreshRange?.autoLoadMorePosts ?? DEFAULT_CONFIG.autoLoadMorePosts
+      ),
+      loadMoreMode: DEFAULT_CONFIG.loadMoreMode,
+    };
+  }
+
+  // 組出 refresh 設定的持久化 payload，避免讀寫欄位各自漂移。
+  function buildRefreshSettingsPayload() {
+    return {
+      min: STATE.config.minRefreshSec,
+      max: STATE.config.maxRefreshSec,
+      jitterEnabled: STATE.config.jitterEnabled,
+      fixedSec: STATE.config.fixedRefreshSec,
+      maxPostsPerScan: clampTargetPostCount(STATE.config.maxPostsPerScan),
+      autoLoadMorePosts: STATE.config.autoLoadMorePosts,
+    };
+  }
+
   // 從持久化儲存讀回目前設定，並將舊格式 refreshRange 合併回執行設定。
   function loadConfig() {
-    const refreshRange = loadJson(STORAGE_KEYS.refreshRange, null);
     return {
       ...DEFAULT_CONFIG,
       includeKeywords: loadString(STORAGE_KEYS.include, DEFAULT_CONFIG.includeKeywords),
@@ -105,25 +267,12 @@
       discordWebhook: loadString(STORAGE_KEYS.discordWebhook, DEFAULT_CONFIG.discordWebhook),
       paused: loadBoolean(STORAGE_KEYS.paused, DEFAULT_CONFIG.paused),
       debugVisible: loadBoolean(STORAGE_KEYS.debugVisible, DEFAULT_CONFIG.debugVisible),
-      minRefreshSec: refreshRange?.min ?? DEFAULT_CONFIG.minRefreshSec,
-      maxRefreshSec: refreshRange?.max ?? DEFAULT_CONFIG.maxRefreshSec,
-      jitterEnabled: refreshRange?.jitterEnabled ?? DEFAULT_CONFIG.jitterEnabled,
-      fixedRefreshSec: refreshRange?.fixedSec ?? DEFAULT_CONFIG.fixedRefreshSec,
-      maxPostsPerScan: clampTargetPostCount(refreshRange?.maxPostsPerScan ?? DEFAULT_CONFIG.maxPostsPerScan),
-      autoLoadMorePosts: loadBoolean(STORAGE_KEYS.autoLoadMorePosts, refreshRange?.autoLoadMorePosts ?? DEFAULT_CONFIG.autoLoadMorePosts),
-      loadMoreMode: DEFAULT_CONFIG.loadMoreMode,
+      ...loadRefreshConfigOverrides(),
     };
   }
 
   function saveRefreshSettings() {
-    saveJson(STORAGE_KEYS.refreshRange, {
-      min: STATE.config.minRefreshSec,
-      max: STATE.config.maxRefreshSec,
-      jitterEnabled: STATE.config.jitterEnabled,
-      fixedSec: STATE.config.fixedRefreshSec,
-      maxPostsPerScan: clampTargetPostCount(STATE.config.maxPostsPerScan),
-      autoLoadMorePosts: STATE.config.autoLoadMorePosts,
-    });
+    saveJson(STORAGE_KEYS.refreshRange, buildRefreshSettingsPayload());
     saveNtfyTopicSetting(STATE.config.ntfyTopic);
     saveDiscordWebhookSetting(STATE.config.discordWebhook);
     saveString(STORAGE_KEYS.autoLoadMorePosts, String(STATE.config.autoLoadMorePosts));
@@ -174,6 +323,42 @@
   // 統一移除指定的持久化鍵值。
   function removeStorageKey(key) {
     removeStoredRawValue(key);
+  }
+
+  // 讀取命名 store 定義，避免各區塊散落硬編碼 storage key。
+  function getStoreDefinition(name) {
+    return STORE_DEFINITIONS[name] || null;
+  }
+
+  // 讀取 object 型 store；缺值或型別不符時回退為空物件。
+  function loadNamedObjectStore(name) {
+    const definition = getStoreDefinition(name);
+    if (!definition) return {};
+    return loadObjectStore(definition.key);
+  }
+
+  // 寫回 object 型 store；型別不符時退回空物件。
+  function saveNamedObjectStore(name, store) {
+    const definition = getStoreDefinition(name);
+    if (!definition) return;
+    saveJson(
+      definition.key,
+      store && typeof store === "object" && !Array.isArray(store) ? store : {}
+    );
+  }
+
+  // 讀取一般 JSON store。
+  function loadNamedJsonStore(name, fallback) {
+    const definition = getStoreDefinition(name);
+    if (!definition) return fallback;
+    return loadJson(definition.key, fallback);
+  }
+
+  // 寫回一般 JSON store。
+  function saveNamedJsonStore(name, value) {
+    const definition = getStoreDefinition(name);
+    if (!definition) return;
+    saveJson(definition.key, value);
   }
 
   // 檢查目前環境是否可使用 Tampermonkey GM storage API。
@@ -274,6 +459,16 @@
       // Ignore legacy storage cleanup errors.
     }
   }
+
+  // 讀取預期為 plain object 的 JSON store；格式不符時回退為空物件。
+  function loadObjectStore(key) {
+    const store = loadJson(key, {});
+    return store && typeof store === "object" && !Array.isArray(store) ? store : {};
+  }
+
+  // ==========================================================================
+  // Text / Common Utils
+  // ==========================================================================
 
   // 文字正規化與小型共用工具，供比對、去重、UI 顯示共用。
   // 移除零寬字元、壓縮空白並去頭尾空白，讓 DOM 抽出的文字可穩定比較。
@@ -443,6 +638,10 @@
     return copied;
   }
 
+  // ==========================================================================
+  // Page Context / Scheduling
+  // ==========================================================================
+
   // 頁面與群組上下文判斷，確認目前是否位於可掃描的 Facebook 群組頁。
   // 從網址路徑抓出目前群組 ID。
   function getCurrentGroupId() {
@@ -567,17 +766,34 @@
   }
 
   // 關鍵字規則解析與刷新排程控制。
+  // 將單一關鍵字規則整理成標準格式。
+  function buildKeywordRule(rule) {
+    const normalizedRule = normalizeText(rule);
+    if (!normalizedRule) return null;
+
+    const terms = normalizedRule
+      .split(" ")
+      .map((part) => normalizeForMatch(part))
+      .filter(Boolean);
+    if (!terms.length) return null;
+
+    return {
+      raw: normalizedRule,
+      terms,
+    };
+  }
+
   // 將 `a b;c` 這類輸入拆成規則陣列；分號代表 OR、空白代表 AND。
   function parseKeywordInput(rawInput) {
     return String(rawInput || "")
       .split(";")
-      .map((rule) => normalizeText(rule))
-      .filter(Boolean)
-      .map((rule) => ({
-        raw: rule,
-        terms: rule.split(" ").map((part) => normalizeForMatch(part)).filter(Boolean),
-      }))
-      .filter((rule) => rule.terms.length > 0);
+      .map((rule) => buildKeywordRule(rule))
+      .filter(Boolean);
+  }
+
+  // 檢查單一關鍵字規則是否命中指定文字。
+  function matchesKeywordRule(rule, normalizedText) {
+    return Boolean(rule && rule.terms.every((term) => normalizedText.includes(term)));
   }
 
   // 逐條規則比對，任一規則成立就視為命中。
@@ -587,7 +803,7 @@
     }
 
     for (const rule of rules) {
-      if (rule.terms.every((term) => normalizedText.includes(term))) {
+      if (matchesKeywordRule(rule, normalizedText)) {
         return { matched: true, rule: rule.raw };
       }
     }
@@ -627,11 +843,30 @@
     STATE.refreshDeadline = null;
   }
 
+  // 清掉待執行的掃描計時器，避免多個 debounce timer 重疊。
+  function clearScanTimer() {
+    if (!STATE.scanTimer) return;
+
+    clearTimeout(STATE.scanTimer);
+    STATE.scanTimer = null;
+  }
+
+  // 透過單一入口觸發主面板重繪，讓生命週期與 UI 收尾點更集中。
+  function requestPanelRender() {
+    renderPanel();
+  }
+
+  // 重新安排 refresh 並立即同步面板倒數顯示。
+  function rescheduleRefreshAndRender() {
+    scheduleRefresh();
+    requestPanelRender();
+  }
+
   // 以 debounce 方式安排掃描，並在 route 剛切換時多等一段穩定時間。
   function scheduleScan(reason) {
     if (STATE.config.paused || STATE.isLoadingMorePosts || STATE.isScanning) return;
     if (!isSupportedGroupPage()) {
-      renderPanel();
+      requestPanelRender();
       return;
     }
 
@@ -639,7 +874,7 @@
     const baseDelayMs = reason === "manual-start" ? 0 : STATE.config.scanDebounceMs;
     const delayMs = Math.max(baseDelayMs, routeSettleRemainingMs);
 
-    if (STATE.scanTimer) clearTimeout(STATE.scanTimer);
+    clearScanTimer();
     STATE.scanTimer = window.setTimeout(() => {
       STATE.scanTimer = null;
       runScan(reason);
@@ -655,15 +890,25 @@
     return Math.max(0, ROUTE_SETTLE_MS - elapsedMs);
   }
 
+  // 重新安裝 observer 後立刻安排下一輪掃描，集中 route / startup 的共同流程。
+  function reinstallObserverAndScheduleScan(reason) {
+    installObserver();
+    scheduleScan(reason);
+  }
+
+  // ==========================================================================
+  // Extractor / DOM Collection
+  // ==========================================================================
+
   // 掃描候選區塊的 DOM 探勘與展開邏輯。
   // 嘗試找出目前群組動態牆的主要根節點，找不到時退回 document.body。
   function findFeedRoot() {
-    return (
-      document.querySelector('[role="feed"]') ||
-      document.querySelector('div[data-pagelet*="GroupsFeed"]') ||
-      document.querySelector('div[data-pagelet*="FeedUnit"]') ||
-      document.body
-    );
+    for (const selector of SELECTORS.feedRoots) {
+      const root = document.querySelector(selector);
+      if (root) return root;
+    }
+
+    return document.body;
   }
 
   // 定義每次向下捲動的保守步長。
@@ -675,6 +920,89 @@
   function getElementText(element) {
     if (!(element instanceof HTMLElement)) return "";
     return normalizeText(element.innerText || element.textContent || "");
+  }
+
+  // 依 selector 順序攤平符合的 HTMLElement，讓多組 selector 掃描可共用同一條走訪手勢。
+  function getSelectorElementsByOrder(scope, selectors) {
+    if (!scope || typeof scope.querySelectorAll !== "function") return [];
+
+    const elements = [];
+    for (const selector of selectors) {
+      const nodes = scope.querySelectorAll(selector);
+      for (const node of nodes) {
+        if (node instanceof HTMLElement) {
+          elements.push(node);
+        }
+      }
+    }
+
+    return elements;
+  }
+
+  // 依畫面垂直位置排序節點，供 expander / timestamp 類抽取共用。
+  function sortElementsByViewportTop(elements) {
+    return [...elements].sort((a, b) => {
+      return Math.round(a.getBoundingClientRect().top) - Math.round(b.getBoundingClientRect().top);
+    });
+  }
+
+  // 依 selector 順序走訪節點，回傳第一個有效結果。
+  function findFirstSelectorResult(container, selectors, resolver) {
+    if (!(container instanceof HTMLElement)) return undefined;
+
+    for (const node of getSelectorElementsByOrder(container, selectors)) {
+      const result = resolver(node);
+      if (result !== undefined) {
+        return result;
+      }
+    }
+
+    return undefined;
+  }
+
+  // 依 selector 順序收集唯一文字片段，供 extractors 共用。
+  function collectUniqueTextSnippets(container, selectors, options = {}) {
+    if (!(container instanceof HTMLElement)) return [];
+
+    const {
+      normalize = normalizeText,
+      minLength = 0,
+      maxItems = Number.POSITIVE_INFINITY,
+      shouldInclude = null,
+    } = options;
+    const snippets = [];
+    const seen = new Set();
+
+    for (const node of getSelectorElementsByOrder(container, selectors)) {
+      const text = normalize(node.innerText || "");
+      if (!text || text.length < minLength) continue;
+      if (typeof shouldInclude === "function" && !shouldInclude(text, node)) continue;
+      if (seen.has(text)) continue;
+
+      seen.add(text);
+      snippets.push(text);
+
+      if (snippets.length >= maxItems) break;
+    }
+
+    return snippets;
+  }
+
+  // 依候選字串與 regex pattern 順序找第一個命中片段。
+  function extractFirstPatternMatch(candidates, patterns) {
+    for (const candidate of candidates) {
+      const text = String(candidate || "");
+      if (!text) continue;
+
+      for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          return match[1];
+        }
+      }
+    }
+
+    return "";
   }
 
   // 判斷元素目前是否可見，避免處理隱藏節點。
@@ -703,11 +1031,7 @@
     const text = getElementText(element);
     if (!text) return false;
 
-    const isExpandLabel = (
-      text === "顯示更多" ||
-      text === "查看更多" ||
-      text === "See more"
-    );
+    const isExpandLabel = TEXT_PATTERNS.postTextExpanderLabels.includes(text);
     if (!isExpandLabel) return false;
 
     const containerRect = container.getBoundingClientRect();
@@ -722,28 +1046,17 @@
   function findPostTextExpanders(container) {
     if (!(container instanceof HTMLElement)) return [];
 
-    const selectors = [
-      'div[role="button"]',
-      'span[role="button"]',
-      'a[role="button"]',
-      "button",
-    ];
     const results = [];
     const seen = new Set();
 
-    for (const selector of selectors) {
-      const nodes = container.querySelectorAll(selector);
-      for (const node of nodes) {
-        if (!(node instanceof HTMLElement)) continue;
-        if (!isPostTextExpander(node, container)) continue;
-        if (seen.has(node)) continue;
-        seen.add(node);
-        results.push(node);
-      }
+    for (const node of getSelectorElementsByOrder(container, SELECTORS.postTextExpanderCandidates)) {
+      if (!isPostTextExpander(node, container)) continue;
+      if (seen.has(node)) continue;
+      seen.add(node);
+      results.push(node);
     }
 
-    results.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-    return results;
+    return sortElementsByViewportTop(results);
   }
 
   // 最多點兩次展開按鈕，盡量先把折疊文字展開再抽取。
@@ -802,14 +1115,10 @@
 
     const hasArticle = element.matches('[role="article"]');
     const hasPermalinkAnchor = Boolean(
-      element.querySelector(
-        'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="]'
-      )
+      element.querySelector(SELECTORS.postPermalinkAnchors)
     );
     const hasProfileName = element.querySelector('[data-ad-rendering-role="profile_name"]') instanceof HTMLElement;
-    const hasStoryMessage = element.querySelector(
-      'div[data-ad-comet-preview="message"], div[data-ad-preview="message"], [data-ad-rendering-role="story_message"]'
-    ) instanceof HTMLElement;
+    const hasStoryMessage = element.querySelector(SELECTORS.postStoryMessage) instanceof HTMLElement;
 
     const score = (
       (hasArticle ? 4 : 0) +
@@ -835,21 +1144,11 @@
 
   // 從多組 selector 收集貼文候選容器，再做可見性與文字長度過濾。
   function collectPostContainers(limit = getCandidateCollectionLimit()) {
-    const selectors = [
-      '[role="feed"] [role="article"]',
-      '[role="feed"] > div',
-      'div[data-pagelet*="FeedUnit"]',
-      'div[data-pagelet*="GroupsFeed"] [role="article"]',
-      '[aria-posinset]',
-    ];
-
     const results = [];
     const seen = new Set();
 
-    for (const selector of selectors) {
-      const nodes = document.querySelectorAll(selector);
-      for (const node of nodes) {
-        if (!(node instanceof HTMLElement)) continue;
+    for (const selector of SELECTORS.postContainerCandidates) {
+      for (const node of getSelectorElementsByOrder(document, [selector])) {
         const canonical = getCanonicalPostElement(node);
         if (!(canonical instanceof HTMLElement)) continue;
         if (!isVisibleElement(canonical)) continue;
@@ -877,12 +1176,12 @@
     return results.slice(0, limit);
   }
 
-  // 貼文識別資料抽取，目前 permalink 關閉，仍保留 postId 萃取邏輯。
-  // 目前 permalink 抽取邏輯停用，保留函式介面讓其他流程不必改動。
+  // Experimental / disabled: permalink 抽取目前停用。
+  // 保留函式介面與 postId 萃取邏輯，避免之後恢復時需要改動其他主流程。
   function extractPermalinkDetails() {
     return {
       permalink: "",
-      source: "disabled",
+      source: FEATURE_STATUS.permalinkExtraction,
     };
   }
 
@@ -891,34 +1190,7 @@
     const text = String(value || "");
     if (!text) return "";
 
-    const patterns = [
-      /\/posts\/(\d+)/i,
-      /\/permalink\/(\d+)/i,
-      /multi_permalinks=(\d+)/i,
-      /story_fbid=(\d+)/i,
-      /[?&]set=pcb\.(\d+)/i,
-      /\bpcb\.(\d+)/i,
-      /ft_ent_identifier=(\d+)/i,
-      /\bpost[_-]?id["'=:\s]+(\d{8,})/i,
-      /\btop_level_post_id["'=:\s]+(\d{8,})/i,
-      /\bmf_story_key["'=:\s]+(\d{8,})/i,
-      /\bstoryid["'=:\s]+(\d{8,})/i,
-      /\bfeedback_target_id["'=:\s]+(\d{8,})/i,
-      /\btargetfbid["'=:\s]+(\d{8,})/i,
-      /\bshare_fbid["'=:\s]+(\d{8,})/i,
-      /\bfbid["'=:\s]+(\d{8,})/i,
-      /"top_level_post_id":"?(\d+)/i,
-      /"mf_story_key":"?(\d+)/i,
-      /"storyID":"?(\d+)/i,
-      /\/posts\/pcb\.(\d+)/i,
-    ];
-
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
-      if (match) return match[1];
-    }
-
-    return "";
+    return extractFirstPatternMatch([text], REGEX_PATTERNS.postId);
   }
 
   // 收集容器自身與子節點上的各種屬性值，提供 post ID regex 掃描。
@@ -944,9 +1216,7 @@
       container.innerHTML || ""
     );
 
-    const nodes = container.querySelectorAll(
-      "a[href], [data-ft], [data-store], [ajaxify], [id], [href], [aria-label], [aria-labelledby], [aria-describedby], [data-testid], [data-pagelet]"
-    );
+    const nodes = container.querySelectorAll(SELECTORS.postIdSourceNodes);
     for (const node of nodes) {
       if (!(node instanceof HTMLElement)) continue;
       if (node instanceof HTMLAnchorElement) {
@@ -982,7 +1252,8 @@
     return "";
   }
 
-  // 時間欄位推測工具，目前主流程暫時停用，但保留供後續修復與調整。
+  // Experimental / disabled: 時間欄位抽取工具目前不參與主流程。
+  // 這一組函式先保留，等確認不會把留言時間誤判成貼文時間後再考慮恢復。
   // 清理時間字串周圍的分隔符號與多餘空白。
   function sanitizeTimestampText(value) {
     return normalizeText(String(value || "").replace(/^[\u00B7\u2022]\s*/, "").replace(/\s*[\u00B7\u2022]\s*$/, ""));
@@ -994,26 +1265,9 @@
     if (!text) return "";
 
     const compact = text.replace(/\s+/g, "");
-    const candidates = [text, compact];
-    const patterns = [
-      /(\d{1,2}月\d{1,2}日(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
-      /(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
-      /((?:今天|今日|昨天)(?:上午|下午)?\d{1,2}[:：]\d{2})/i,
-      /(\d+\s*(?:秒|分|分鐘|小時|天|週|周|月|年))/i,
-      /(\d+\s*(?:hrs?|mins?|min|hour|hours|day|days|week|weeks|month|months|year|years))/i,
-      /(剛剛|昨天|今日|今天)/i,
-    ];
-
-    for (const candidate of candidates) {
-      for (const pattern of patterns) {
-        const match = candidate.match(pattern);
-        if (match && match[1]) {
-          return sanitizeTimestampText(match[1]);
-        }
-      }
-    }
-
-    return "";
+    return sanitizeTimestampText(
+      extractFirstPatternMatch([text, compact], REGEX_PATTERNS.timestampLoose)
+    );
   }
 
   // 較保守地抽取時間片段，盡量避免把一般文字誤判成時間。
@@ -1023,26 +1277,9 @@
 
     const compact = text.replace(/\s+/g, "");
     const signal = text.replace(/[^\d/:\uFF1Aa-zA-Z\u4eca\u65e5\u6628\u5929\u525b\u5206\u9418\u5c0f\u6642\u5929\u9031\u5468\u6708\u5e74\u65e5\u4e0a\u4e0b\u5348]/g, "");
-    const candidates = [text, compact, signal];
-    const patterns = [
-      /(\d{1,2}\s*\u6708\s*\d{1,2}\s*\u65e5(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
-      /(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
-      /((?:\u4eca\u5929|\u4eca\u65e5|\u6628\u5929)(?:\s*(?:\u4e0a\u5348|\u4e0b\u5348))?\s*\d{1,2}\s*[:\uff1a]\s*\d{2})/i,
-      /(\d+\s*(?:\u79d2|\u5206(?:\u9418)?|\u5c0f\u6642|\u5929|\u9031|\u5468|\u6708|\u5e74))/i,
-      /(\d+\s*(?:hrs?|mins?|min|hour|hours|day|days|week|weeks|month|months|year|years))/i,
-      /(\u525b\u525b|\u6628\u5929|\u4eca\u65e5|\u4eca\u5929)/i,
-    ];
-
-    for (const candidate of candidates) {
-      for (const pattern of patterns) {
-        const match = candidate.match(pattern);
-        if (match && match[1]) {
-          return sanitizeTimestampText(match[1]);
-        }
-      }
-    }
-
-    return "";
+    return sanitizeTimestampText(
+      extractFirstPatternMatch([text, compact, signal], REGEX_PATTERNS.timestampSafe)
+    );
   }
 
   // 判斷某個 anchor 是否像是貼文本身的時間連結，而不是留言或其他導頁。
@@ -1106,23 +1343,18 @@
       return { preferredNodes, fallbackNodes };
     }
 
-    for (const selector of selectors) {
-      const nodes = scope.querySelectorAll(selector);
-      for (const node of nodes) {
-        if (!(node instanceof HTMLElement)) continue;
-
-        if (isLikelyPostTimestampAnchor(node, permalink)) {
-          preferredNodes.push(node);
-        } else {
-          fallbackNodes.push(node);
-        }
+    for (const node of getSelectorElementsByOrder(scope, selectors)) {
+      if (isLikelyPostTimestampAnchor(node, permalink)) {
+        preferredNodes.push(node);
+      } else {
+        fallbackNodes.push(node);
       }
     }
 
-    preferredNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
-    fallbackNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
-
-    return { preferredNodes, fallbackNodes };
+    return {
+      preferredNodes: sortElementsByViewportTop(preferredNodes),
+      fallbackNodes: sortElementsByViewportTop(fallbackNodes),
+    };
   }
 
   // 先試偏好節點，再試備援節點，取第一個可用的時間字串。
@@ -1149,7 +1381,7 @@
 
     let current = profileName.parentElement;
     while (current && current !== container && current instanceof HTMLElement) {
-      const matchingAnchor = current.querySelector('a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="]');
+      const matchingAnchor = current.querySelector(SELECTORS.postPermalinkAnchors);
       if (matchingAnchor instanceof HTMLElement && isLikelyPostTimestampAnchor(matchingAnchor, permalink)) {
         return current;
       }
@@ -1161,20 +1393,9 @@
 
   // 綜合 header 優先、位置排序與屬性候選來抽取貼文時間。
   function extractTimestampText(container, permalink) {
-    const maybeTimestampSelectors = [
-      'a[href*="/groups/"][href*="/posts/"]',
-      'a[href*="/permalink/"]',
-      'a[href*="multi_permalinks="]',
-      'a[href*="story_fbid="]',
-      "a[aria-label]",
-      "span[aria-label]",
-      "time",
-      "[datetime]",
-      "[data-utime]",
-    ];
     const headerElement = findPostHeaderElement(container, permalink);
     if (headerElement) {
-      const headerNodes = collectTimestampNodesInScope(headerElement, maybeTimestampSelectors, permalink);
+      const headerNodes = collectTimestampNodesInScope(headerElement, SELECTORS.timestampCandidates, permalink);
       const headerTimestamp = extractTimestampFromNodes(headerNodes.preferredNodes, headerNodes.fallbackNodes, permalink);
       if (headerTimestamp) return headerTimestamp;
       return "";
@@ -1187,35 +1408,31 @@
     const containerRect = container.getBoundingClientRect();
     const headerThreshold = Math.max(140, Math.min(260, Math.round(containerRect.height * 0.35 || 220)));
 
-    for (const selector of maybeTimestampSelectors) {
-      const nodes = container.querySelectorAll(selector);
-      for (const node of nodes) {
-        if (!(node instanceof HTMLElement)) continue;
-        const isHeaderRegion = getTimestampNodeSortValue(node) - Math.round(containerRect.top) <= headerThreshold;
+    for (const node of getSelectorElementsByOrder(container, SELECTORS.timestampCandidates)) {
+      const isHeaderRegion = getTimestampNodeSortValue(node) - Math.round(containerRect.top) <= headerThreshold;
 
-        if (isLikelyPostTimestampAnchor(node, permalink)) {
-          preferredNodes.push(node);
-          if (isHeaderRegion) preferredHeaderNodes.push(node);
-        } else {
-          fallbackNodes.push(node);
-          if (isHeaderRegion) fallbackHeaderNodes.push(node);
-        }
+      if (isLikelyPostTimestampAnchor(node, permalink)) {
+        preferredNodes.push(node);
+        if (isHeaderRegion) preferredHeaderNodes.push(node);
+      } else {
+        fallbackNodes.push(node);
+        if (isHeaderRegion) fallbackHeaderNodes.push(node);
       }
     }
 
-    preferredHeaderNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
-    fallbackHeaderNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
-    preferredNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
-    fallbackNodes.sort((a, b) => getTimestampNodeSortValue(a) - getTimestampNodeSortValue(b));
+    const sortedPreferredHeaderNodes = sortElementsByViewportTop(preferredHeaderNodes);
+    const sortedFallbackHeaderNodes = sortElementsByViewportTop(fallbackHeaderNodes);
+    const sortedPreferredNodes = sortElementsByViewportTop(preferredNodes);
+    const sortedFallbackNodes = sortElementsByViewportTop(fallbackNodes);
 
-    const headerTimestamp = extractTimestampFromNodes(preferredHeaderNodes, fallbackHeaderNodes, permalink);
+    const headerTimestamp = extractTimestampFromNodes(sortedPreferredHeaderNodes, sortedFallbackHeaderNodes, permalink);
     if (headerTimestamp) return headerTimestamp;
 
-    if (preferredHeaderNodes.length || fallbackHeaderNodes.length) {
+    if (sortedPreferredHeaderNodes.length || sortedFallbackHeaderNodes.length) {
       return "";
     }
 
-    return extractTimestampFromNodes(preferredNodes, fallbackNodes, permalink);
+    return extractTimestampFromNodes(sortedPreferredNodes, sortedFallbackNodes, permalink);
   }
 
   // 從單一節點上常見的時間來源屬性逐一抽取可用值。
@@ -1252,85 +1469,47 @@
     return Boolean(extractTimestampFragmentSafe(value));
   }
 
+  // ==========================================================================
+  // Post Parsing / Notification Formatting
+  // ==========================================================================
+
   // 作者、內文與內容品質評分抽取。
   // 以多組常見 selector 抽取作者名稱，並排除操作按鈕等假陽性文字。
   function extractAuthor(container) {
-    const selectors = [
-      "h2 span",
-      "h3 span",
-      'a[role="link"] span[dir="auto"]',
-      "strong span",
-    ];
-
-    for (const selector of selectors) {
-      const nodes = container.querySelectorAll(selector);
-      for (const node of nodes) {
-        if (!(node instanceof HTMLElement)) continue;
-        const text = normalizeText(node.innerText).replace(/\s*[·•]\s*追蹤\s*$/u, "");
-        if (!text) continue;
-        if (text.length > 80) continue;
-        if (/^(Like|Comment|Share|Most relevant)$/i.test(text)) continue;
-        return text;
-      }
-    }
-
-    return "";
+    return findFirstSelectorResult(container, SELECTORS.authorCandidates, (node) => {
+      const text = normalizeText(node.innerText).replace(REGEX_PATTERNS.authorFollowSuffix, "");
+      if (!text) return undefined;
+      if (text.length > 80) return undefined;
+      if (REGEX_PATTERNS.authorUiLabels.test(text)) return undefined;
+      return text;
+    }) || "";
   }
 
   // 優先從 Facebook 較穩定的貼文訊息區塊抽正文，失敗才退回通用 dir="auto" 掃描。
   function extractPostTextDetails(container) {
-    const primarySelectors = [
-      'div[data-ad-comet-preview="message"]',
-      'div[data-ad-preview="message"]',
-      '[data-ad-rendering-role="story_message"]',
-    ];
-    const fallbackSelectors = [
-      'div[dir="auto"]',
-      'span[dir="auto"]',
-    ];
+    const primarySnippets = collectUniqueTextSnippets(container, SELECTORS.primaryPostText, {
+      normalize: cleanExtractedText,
+      minLength: 2,
+      maxItems: 8,
+    });
 
-    const snippets = [];
-    const seen = new Set();
-
-    for (const selector of primarySelectors) {
-      const nodes = container.querySelectorAll(selector);
-      for (const node of nodes) {
-        if (!(node instanceof HTMLElement)) continue;
-        const text = cleanExtractedText(node.innerText);
-        if (!text || text.length < 2) continue;
-        if (seen.has(text)) continue;
-        seen.add(text);
-        snippets.push(text);
-      }
-      if (snippets.length >= 8) break;
-    }
-
-    if (snippets.length) {
+    if (primarySnippets.length) {
       return {
-        text: cleanExtractedText(snippets.join(" ")),
+        text: cleanExtractedText(primarySnippets.join(" ")),
         source: "primary",
       };
     }
 
-    if (!snippets.length) {
-      for (const selector of fallbackSelectors) {
-        const nodes = container.querySelectorAll(selector);
-        for (const node of nodes) {
-          if (!(node instanceof HTMLElement)) continue;
-          const text = cleanExtractedText(node.innerText);
-          if (!text || text.length < 6) continue;
-          if (isProbablyTimestamp(text)) continue;
-          if (seen.has(text)) continue;
-          seen.add(text);
-          snippets.push(text);
-        }
-        if (snippets.length >= 8) break;
-      }
-    }
+    const fallbackSnippets = collectUniqueTextSnippets(container, SELECTORS.fallbackPostText, {
+      normalize: cleanExtractedText,
+      minLength: 6,
+      maxItems: 8,
+      shouldInclude: (text) => !isProbablyTimestamp(text),
+    });
 
-    if (snippets.length) {
+    if (fallbackSnippets.length) {
       return {
-        text: cleanExtractedText(snippets.join(" ")),
+        text: cleanExtractedText(fallbackSnippets.join(" ")),
         source: "fallback",
       };
     }
@@ -1351,28 +1530,15 @@
     let text = normalizeText(value);
     if (!text) return "";
 
-    const noisyFragments = [
-      "Facebook",
-      "貼文的相片",
-      "顯示更多",
-      "查看更多",
-      "See more",
-      "Most relevant",
-      "Like",
-      "Comment",
-      "Share",
-    ];
-
-    for (const fragment of noisyFragments) {
+    for (const fragment of TEXT_PATTERNS.noisyTextFragments) {
       text = text.replaceAll(fragment, " ");
     }
 
-    text = text
-      .replace(/\b[a-z0-9]{12,}\.com\b/gi, " ")
-      .replace(/\bsnproSet[a-z0-9]+\b/gi, " ")
-      .replace(/\bsotoeSrdpn[a-z0-9]+\b/gi, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+    for (const pattern of REGEX_PATTERNS.cleanedTextNoise) {
+      text = text.replace(pattern, " ");
+    }
+
+    text = text.replace(/\s+/g, " ").trim();
 
     return text;
   }
@@ -1382,6 +1548,32 @@
     const compact = normalizeForKey(value);
     if (!compact) return "";
     return compact.slice(0, 120);
+  }
+
+  // 將貼文去重常用的文字片段整理成固定結構。
+  function buildPostKeyFragments(post) {
+    return {
+      compactText: buildStableTextSignature(post.text || post.normalizedText),
+      compactAuthor: normalizeForKey(post.author),
+      compactTime: normalizeForKey(post.timestampText),
+    };
+  }
+
+  // 依作者 / 時間 / 文字片段組出複合型去重鍵。
+  function buildCompositePostKey({ compactAuthor, compactTime, compactText }) {
+    if (compactAuthor && compactTime && compactText) {
+      return `author:${compactAuthor}||time:${compactTime}||text:${compactText}`;
+    }
+
+    if (compactAuthor && compactText) {
+      return `author:${compactAuthor}||text:${compactText}`;
+    }
+
+    if (compactText) {
+      return `text:${compactText}`;
+    }
+
+    return "";
   }
 
   // 依 postId、permalink、作者、來源等訊號計算粗略品質分數。
@@ -1407,23 +1599,24 @@
     };
   }
 
+  // 建立桌面通知用的單行片段。
+  function buildCompactNotificationSegments(fields) {
+    return [
+      fields.groupName,
+      fields.author,
+      `match: ${fields.includeRule}`,
+      truncate(fields.text, 120),
+    ].filter(Boolean);
+  }
+
   // 建立較精簡的單行通知文字，適合桌面通知。
   function buildCompactNotificationBody(post) {
     const fields = getNotificationFields(post);
-    return truncate(
-      [
-        fields.groupName,
-        fields.author,
-        `match: ${fields.includeRule}`,
-        truncate(fields.text, 120),
-      ].filter(Boolean).join(" | "),
-      250
-    );
+    return truncate(buildCompactNotificationSegments(fields).join(" | "), 250);
   }
 
-  // 建立多行通知文字，格式接近「查看紀錄」的顯示方式。
-  function buildRemoteNotificationBody(post) {
-    const fields = getNotificationFields(post);
+  // 建立遠端通知用的多行文字列。
+  function buildRemoteNotificationLines(fields) {
     const lines = [
       `社團: ${fields.groupName}`,
       `作者: ${fields.author}`,
@@ -1435,10 +1628,17 @@
       lines.push(`連結: ${fields.permalink}`);
     }
 
-    return lines.join("\n");
+    return lines;
   }
 
-  // 通知能力檢查與 ntfy 傳送。
+  // 建立多行通知文字，格式接近「查看紀錄」的顯示方式。
+  function buildRemoteNotificationBody(post) {
+    const fields = getNotificationFields(post);
+    return buildRemoteNotificationLines(fields).join("\n");
+  }
+
+  // Experimental / internal-only: browser-native 通知路徑仍保留在程式內，
+  // 但目前沒有對外暴露成設定視窗中的正式選項。
   // 若啟用原生桌面通知，主動請求權限或回報目前權限狀態。
   async function requestBrowserNotificationPermission() {
     try {
@@ -1526,72 +1726,83 @@
     });
   }
 
-  // 讀取各社團最近一次最上方貼文快照，用於快速判斷是否需要深度掃描。
-  function getLatestTopPostsStore() {
-    const store = loadJson(STORAGE_KEYS.latestTopPosts, {});
-    return store && typeof store === "object" ? store : {};
+  // ==========================================================================
+  // Persistence / Dedupe / History
+  // ==========================================================================
+
+  // 讀取指定 group bucket；型別不符時回退為預設值。
+  function getGroupStoreValue(store, groupId, fallback, isValid) {
+    if (!groupId) return fallback;
+    const value = store?.[groupId];
+    return isValid(value) ? value : fallback;
   }
 
-  // 寫回各社團最近一次最上方貼文快照。
-  function setLatestTopPostsStore(store) {
-    saveJson(STORAGE_KEYS.latestTopPosts, store);
+  // 讀取命名 object store 中的指定 group bucket。
+  function getNamedGroupObjectValue(storeName, groupId, fallback, isValid) {
+    return getGroupStoreValue(loadNamedObjectStore(storeName), groupId, fallback, isValid);
+  }
+
+  // 將單一群組資料寫回命名 object store。
+  function setNamedGroupObjectValue(storeName, groupId, value) {
+    if (!groupId) return;
+    const store = loadNamedObjectStore(storeName);
+    store[groupId] = value;
+    saveNamedObjectStore(storeName, store);
+  }
+
+  // 將最新最上方貼文整理成可持久化的快照格式。
+  function buildLatestTopPostSnapshot(post) {
+    const postKey = getPostKey(post);
+    if (!postKey) return null;
+
+    return {
+      postKey,
+      author: post.author || "",
+      text: truncate(post.text || "", 160),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  // 將持久化的貼文清單正規化為物件陣列。
+  function normalizeStoredPostList(posts) {
+    return Array.isArray(posts)
+      ? posts.filter((post) => post && typeof post === "object")
+      : [];
   }
 
   // 讀取指定社團最近一次最上方貼文快照。
   function getLatestTopPostForGroup(groupId) {
-    if (!groupId) return null;
-    const store = getLatestTopPostsStore();
-    const snapshot = store[groupId];
-    return snapshot && typeof snapshot === "object" ? snapshot : null;
+    return getNamedGroupObjectValue(
+      "latestTopPosts",
+      groupId,
+      null,
+      (value) => value && typeof value === "object"
+    );
   }
 
   // 保存指定社團最近一次最上方貼文快照。
   function setLatestTopPostForGroup(groupId, post) {
     if (!groupId || !post) return;
 
-    const postKey = getPostKey(post);
-    if (!postKey) return;
+    const snapshot = buildLatestTopPostSnapshot(post);
+    if (!snapshot) return;
 
-    const store = getLatestTopPostsStore();
-    store[groupId] = {
-      postKey,
-      author: post.author || "",
-      text: truncate(post.text || "", 160),
-      updatedAt: new Date().toISOString(),
-    };
-    setLatestTopPostsStore(store);
-  }
-
-  // 讀取各社團最近一次完整掃描後的貼文清單，用於快篩命中時沿用上一輪顯示結果。
-  function getLatestScanPostsStore() {
-    const store = loadJson(STORAGE_KEYS.latestScanPosts, {});
-    return store && typeof store === "object" ? store : {};
-  }
-
-  // 寫回各社團最近一次完整掃描後的貼文清單。
-  function setLatestScanPostsStore(store) {
-    saveJson(STORAGE_KEYS.latestScanPosts, store);
+    setNamedGroupObjectValue("latestTopPosts", groupId, snapshot);
   }
 
   // 讀取指定社團最近一次完整掃描後的貼文清單。
   function getLatestScanPostsForGroup(groupId) {
-    if (!groupId) return [];
-    const store = getLatestScanPostsStore();
-    const posts = store[groupId];
-    return Array.isArray(posts) ? posts : [];
+    return getNamedGroupObjectValue(
+      "latestScanPosts",
+      groupId,
+      [],
+      Array.isArray
+    );
   }
 
   // 保存指定社團最近一次完整掃描後的貼文清單。
   function setLatestScanPostsForGroup(groupId, posts) {
-    if (!groupId) return;
-
-    const normalizedPosts = Array.isArray(posts)
-      ? posts.filter((post) => post && typeof post === "object")
-      : [];
-
-    const store = getLatestScanPostsStore();
-    store[groupId] = normalizedPosts;
-    setLatestScanPostsStore(store);
+    setNamedGroupObjectValue("latestScanPosts", groupId, normalizeStoredPostList(posts));
   }
 
   // 只有例行掃描才啟用最上方貼文快篩，避免手動操作時誤跳過完整掃描。
@@ -1620,20 +1831,9 @@
     const permalink = String(post.permalink || "");
     if (extractPostIdFromValue(permalink)) return `url:${permalink}`;
 
-    const compactText = buildStableTextSignature(post.text || post.normalizedText);
-    const compactAuthor = normalizeForKey(post.author);
-    const compactTime = normalizeForKey(post.timestampText);
-
-    if (compactAuthor && compactTime && compactText) {
-      return `author:${compactAuthor}||time:${compactTime}||text:${compactText}`;
-    }
-
-    if (compactAuthor && compactText) {
-      return `author:${compactAuthor}||text:${compactText}`;
-    }
-
-    if (compactText) {
-      return `text:${compactText}`;
+    const compositeKey = buildCompositePostKey(buildPostKeyFragments(post));
+    if (compositeKey) {
+      return compositeKey;
     }
 
     return buildFallbackId(post);
@@ -1653,58 +1853,96 @@
     return [compactAuthor, compactTime, compactText].filter(Boolean).join("||") || "";
   }
 
+  // 依去重鍵保留唯一貼文，供多條 selector 命中同一篇貼文時共用。
+  function collectUniquePostsByKey(posts, limit = STATE.config.maxPostsPerScan) {
+    const seen = new Set();
+    const results = [];
+
+    for (const post of posts) {
+      const key = getPostKey(post);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      results.push(post);
+    }
+
+    return results.slice(0, limit);
+  }
+
   // 讀取「已看過貼文」儲存區。
   function getSeenPostsStore() {
-    const store = loadJson(STORAGE_KEYS.seenPosts, {});
-    return store && typeof store === "object" ? store : {};
+    return loadNamedObjectStore("seenPosts");
   }
 
   // 寫回「已看過貼文」儲存區。
   function setSeenPostsStore(store) {
-    saveJson(STORAGE_KEYS.seenPosts, store);
+    saveNamedObjectStore("seenPosts", store);
   }
 
   // 檢查某篇貼文是否已看過，支援直接傳 key 或傳入完整 post 物件。
   function hasSeenPost(groupId, postKey) {
-    const store = getSeenPostsStore();
-    if (!store[groupId]) return false;
-    if (typeof postKey !== "object" && postKey && store[groupId][postKey]) return true;
+    const groupStore = getSeenPostGroupStore(groupId);
+    if (!Object.keys(groupStore).length) return false;
+    if (typeof postKey !== "object" && postKey && groupStore[postKey]) return true;
 
     if (typeof postKey === "object" && postKey) {
       const currentKey = getPostKey(postKey);
       const legacyKey = getLegacyPostKey(postKey);
       return Boolean(
-        (currentKey && store[groupId][currentKey]) ||
-        (legacyKey && store[groupId][legacyKey])
+        (currentKey && groupStore[currentKey]) ||
+        (legacyKey && groupStore[legacyKey])
       );
     }
 
     return false;
   }
 
-  // 將貼文標記為已看過，並依時間保留最近 N 筆。
-  function markPostSeen(groupId, postKey) {
-    const normalizedGroupId = String(groupId || "");
-    const store = getSeenPostsStore();
-    const nextGroupStore = (
-      store[normalizedGroupId] && typeof store[normalizedGroupId] === "object"
-        ? store[normalizedGroupId]
-        : {}
-    );
-
-    const nextStore = {};
-    if (normalizedGroupId) {
-      nextStore[normalizedGroupId] = nextGroupStore;
-    }
-
-    nextGroupStore[postKey] = new Date().toISOString();
-
-    const entries = Object.entries(nextGroupStore).sort((a, b) => {
+  // 將單一群組的 seen-post map 依時間排序並裁切到指定上限。
+  function trimSeenPostGroupStore(groupStore, limit) {
+    const entries = Object.entries(groupStore || {}).sort((a, b) => {
       return new Date(b[1]).getTime() - new Date(a[1]).getTime();
     });
 
-    nextStore[normalizedGroupId] = Object.fromEntries(entries.slice(0, getDynamicSeenPostLimit()));
-    setSeenPostsStore(nextStore);
+    return Object.fromEntries(entries.slice(0, limit));
+  }
+
+  // 建立只保留目前群組 bucket 的 seen-post store。
+  function buildSeenPostsStoreForGroup(groupId, groupStore) {
+    const normalizedGroupId = String(groupId || "");
+    if (!normalizedGroupId) {
+      return {};
+    }
+
+    return {
+      [normalizedGroupId]: groupStore,
+    };
+  }
+
+  // 讀取指定群組的 seen-post bucket；格式不符時回退為空物件。
+  function getSeenPostGroupStore(groupId, store = getSeenPostsStore()) {
+    const normalizedGroupId = String(groupId || "");
+    if (!normalizedGroupId) {
+      return {};
+    }
+
+    const groupStore = store?.[normalizedGroupId];
+    return groupStore && typeof groupStore === "object" ? groupStore : {};
+  }
+
+  // 只寫回指定群組的 seen-post bucket，其他群組資料一律丟棄。
+  function setSeenPostGroupStore(groupId, groupStore) {
+    setSeenPostsStore(buildSeenPostsStoreForGroup(groupId, groupStore));
+  }
+
+  // 將貼文標記為已看過，並依時間保留最近 N 筆。
+  function markPostSeen(groupId, postKey) {
+    const normalizedGroupId = String(groupId || "");
+    const nextGroupStore = getSeenPostGroupStore(normalizedGroupId);
+
+    nextGroupStore[postKey] = new Date().toISOString();
+    setSeenPostGroupStore(
+      normalizedGroupId,
+      trimSeenPostGroupStore(nextGroupStore, getDynamicSeenPostLimit())
+    );
   }
 
   // 清空指定群組的已看過貼文紀錄，並移除其他群組殘留的去重資料。
@@ -1715,23 +1953,83 @@
       return;
     }
 
-    setSeenPostsStore({
-      [normalizedGroupId]: {},
-    });
+    setSeenPostGroupStore(normalizedGroupId, {});
   }
 
-  // 讀取命中通知歷史；新版使用全域陣列，舊版依社團分組資料會在讀取時攤平。
-  function getMatchHistoryStore() {
-    const store = loadJson(STORAGE_KEYS.matchHistory, []);
+  // 讀取目前命中歷史保留上限，集中後續裁切行為。
+  function getMatchHistoryLimit() {
+    return STATE.config.matchHistoryGlobalLimit;
+  }
+
+  // 將命中歷史資料正規化成全域陣列格式，並套用排序與上限裁切。
+  function normalizeMatchHistoryEntries(store) {
     if (Array.isArray(store)) {
-      return store;
+      return sortMatchHistoryEntries(store).slice(0, getMatchHistoryLimit());
     }
 
     if (!store || typeof store !== "object") {
       return [];
     }
 
+    return sortMatchHistoryEntries(flattenLegacyMatchHistoryStore(store))
+      .slice(0, getMatchHistoryLimit());
+  }
+
+  // 讀取命中通知歷史；新版使用全域陣列，舊版依社團分組資料會在讀取時攤平。
+  function getMatchHistoryStore() {
+    return normalizeMatchHistoryEntries(loadNamedJsonStore("matchHistory", []));
+  }
+
+  // 寫回全域命中通知歷史。
+  function setMatchHistoryStore(store) {
+    saveNamedJsonStore("matchHistory", normalizeMatchHistoryEntries(store));
+  }
+
+  // 讀取最近一次通知狀態。
+  function getLatestNotificationStore() {
+    const store = loadNamedJsonStore("lastNotification", null);
+    return store && typeof store === "object" ? store : null;
+  }
+
+  // 寫回最近一次通知狀態。
+  function setLatestNotificationStore(store) {
+    saveNamedJsonStore("lastNotification", store && typeof store === "object" ? store : null);
+  }
+
+  // 更新執行期 latestNotification，必要時同步持久化。
+  function setLatestNotificationState(notification, options = {}) {
+    const { persist = false } = options;
+    STATE.latestNotification = notification && typeof notification === "object" ? notification : null;
+    if (persist) {
+      setLatestNotificationStore(STATE.latestNotification);
+    }
+  }
+
+  // 清空執行期 latestNotification，必要時同步清掉持久化值。
+  function clearLatestNotificationState(options = {}) {
+    const { persist = false } = options;
+    STATE.latestNotification = null;
+    if (persist) {
+      setLatestNotificationStore(null);
+    }
+  }
+
+  // 清空所有命中通知歷史。
+  function clearMatchHistory() {
+    setMatchHistoryStore([]);
+  }
+
+  // 將命中歷史依通知時間由新到舊排序。
+  function sortMatchHistoryEntries(entries) {
+    return [...entries].sort((a, b) => {
+      return new Date(b.notifiedAt || 0).getTime() - new Date(a.notifiedAt || 0).getTime();
+    });
+  }
+
+  // 將新版前的舊格式命中歷史攤平成全域陣列。
+  function flattenLegacyMatchHistoryStore(store) {
     const flattened = [];
+
     for (const [groupId, entries] of Object.entries(store)) {
       if (!Array.isArray(entries)) continue;
       for (const entry of entries) {
@@ -1750,39 +2048,23 @@
       }
     }
 
-    flattened.sort((a, b) => {
-      return new Date(b.notifiedAt || 0).getTime() - new Date(a.notifiedAt || 0).getTime();
-    });
-    return flattened.slice(0, STATE.config.matchHistoryGlobalLimit);
+    return flattened;
   }
 
-  // 寫回全域命中通知歷史。
-  function setMatchHistoryStore(store) {
-    saveJson(STORAGE_KEYS.matchHistory, Array.isArray(store) ? store : []);
-  }
-
-  // 清空所有命中通知歷史。
-  function clearMatchHistory() {
-    setMatchHistoryStore([]);
-  }
-
-  // 將本輪新命中的貼文批次加入全域歷史，保留傳入順序並移除相同 key 的舊項目。
-  function addMatchHistory(groupId, posts) {
-    const store = getMatchHistoryStore();
+  // 建立本輪要加入的命中歷史項目，並同步收集用來去掉舊紀錄的唯一鍵。
+  function buildIncomingMatchHistoryEntries(groupId, groupName, posts) {
     const incomingPosts = Array.isArray(posts) ? posts : [posts];
-    const nextEntries = [];
-    const seenIncomingKeys = new Set();
-    const normalizedGroupId = String(groupId || "");
-    const groupName = getCurrentGroupName();
+    const entries = [];
+    const incomingKeys = new Set();
 
     for (const post of incomingPosts) {
       const postKey = post?.postKey || "";
-      const historyKey = `${normalizedGroupId}::${postKey}`;
-      if (postKey && seenIncomingKeys.has(historyKey)) continue;
-      if (postKey) seenIncomingKeys.add(historyKey);
+      const historyKey = `${groupId}::${postKey}`;
+      if (postKey && incomingKeys.has(historyKey)) continue;
+      if (postKey) incomingKeys.add(historyKey);
 
-      nextEntries.push({
-        groupId: normalizedGroupId,
+      entries.push({
+        groupId,
         groupName: groupName || "",
         postKey,
         author: post?.author || "",
@@ -1794,15 +2076,46 @@
       });
     }
 
-    const existing = store.filter((item) => {
+    return {
+      entries,
+      incomingKeys,
+    };
+  }
+
+  // 合併新的命中歷史與既有紀錄，移除重複 key 並裁切到上限。
+  function mergeMatchHistoryEntries(existingEntries, incomingEntries, incomingKeys, limit) {
+    const existing = existingEntries.filter((item) => {
       if (!item?.postKey) return true;
-      return !seenIncomingKeys.has(`${String(item.groupId || "")}::${item.postKey}`);
+      return !incomingKeys.has(`${String(item.groupId || "")}::${item.postKey}`);
     });
 
+    return [...incomingEntries, ...existing].slice(0, limit);
+  }
+
+  // 將本輪新命中的貼文批次加入全域歷史，保留傳入順序並移除相同 key 的舊項目。
+  function addMatchHistory(groupId, posts) {
+    const store = getMatchHistoryStore();
+    const normalizedGroupId = String(groupId || "");
+    const groupName = getCurrentGroupName();
+    const { entries, incomingKeys } = buildIncomingMatchHistoryEntries(
+      normalizedGroupId,
+      groupName,
+      posts
+    );
+
     setMatchHistoryStore(
-      [...nextEntries, ...existing].slice(0, STATE.config.matchHistoryGlobalLimit)
+      mergeMatchHistoryEntries(
+        store,
+        entries,
+        incomingKeys,
+        getMatchHistoryLimit()
+      )
     );
   }
+
+  // ==========================================================================
+  // Scan Engine
+  // ==========================================================================
 
   // 將候選 DOM 轉成貼文紀錄，並在多個視窗區段內累積掃描結果。
   // 將單一候選容器轉成統一的貼文資料結構。
@@ -1903,219 +2216,92 @@
     return { posts, meta };
   }
 
-  // 只掃描目前可見視窗，用於最上方貼文快篩命中後的快速返回。
-  async function collectVisiblePostsOnly() {
-    const targetPostCount = clampTargetPostCount(STATE.config.maxPostsPerScan);
-    const candidates = collectPostContainers(getCandidateCollectionLimit(1));
-    const collected = await collectPostsFromCandidates(candidates, new WeakMap());
-    const posts = dedupeExtractedPosts(collected.posts, targetPostCount);
+  // 建立跨視窗掃描的執行期上下文。
+  function createWindowCollectionContext(targetPostCount) {
+    const result = normalizeCollectedMeta({
+      targetCount: targetPostCount,
+      maxWindowCount: STATE.config.autoLoadMorePosts ? getDynamicMaxWindows(targetPostCount) : 1,
+    });
 
     return {
-      posts,
-      meta: {
-        targetCount: targetPostCount,
-        mode: STATE.config.autoLoadMorePosts ? STATE.config.loadMoreMode : "off",
-        attempted: false,
-        attempts: 0,
-        maxWindowCount: STATE.config.autoLoadMorePosts ? getDynamicMaxWindows(targetPostCount) : 1,
-        stagnantWindows: 0,
-        stopReason: "",
-        beforeCount: candidates.length,
-        afterCount: candidates.length,
-        windowCount: 1,
-        candidateCount: candidates.length,
-        cacheHitCount: collected.meta.cacheHitCount,
-        freshExtractCount: collected.meta.freshExtractCount,
-        parsedCount: posts.length,
-        accumulatedCount: posts.length,
-        filteredEmptyTextCount: collected.meta.filteredEmptyTextCount,
-        filteredNonPostCount: collected.meta.filteredNonPostCount,
-        filteredFeedSortControlCount: collected.meta.filteredFeedSortControlCount,
-        articleElementCount: collected.meta.articleElementCount,
-        postsWithPostIdCount: collected.meta.postsWithPostIdCount,
-        topPostShortcutUsed: false,
-        topPostShortcutMatched: false,
-      },
-    };
-  }
-
-  // 先比對最上方最新貼文是否與上一輪相同；相同時直接跳過深度掃描。
-  async function collectPostsWithTopPostShortcut(reason, groupId) {
-    const visibleResult = await collectVisiblePostsOnly();
-    const topPost = visibleResult.posts[0] || null;
-    const topPostKey = topPost ? getPostKey(topPost) : "";
-
-    visibleResult.meta.topPostShortcutUsed = true;
-    visibleResult.meta.topPostKey = topPostKey;
-
-    if (!STATE.config.autoLoadMorePosts) {
-      visibleResult.meta.stopReason = "已停用自動載入更多貼文";
-      return visibleResult;
-    }
-
-    if (!shouldUseTopPostShortcut(reason)) {
-      visibleResult.meta.topPostShortcutMatched = false;
-      return null;
-    }
-
-    if (getCurrentFeedSortLabel() !== "新貼文") {
-      visibleResult.meta.topPostShortcutMatched = false;
-      return null;
-    }
-
-    if (!topPost || !topPostKey) {
-      visibleResult.meta.topPostShortcutMatched = false;
-      return null;
-    }
-
-    const previousTopPost = getLatestTopPostForGroup(groupId);
-    visibleResult.meta.previousTopPostKey = previousTopPost?.postKey || "";
-
-    if (!previousTopPost?.postKey) {
-      setLatestTopPostForGroup(groupId, topPost);
-      visibleResult.meta.topPostShortcutMatched = false;
-      return null;
-    }
-
-    if (previousTopPost.postKey === topPostKey) {
-      const cachedPosts = getLatestScanPostsForGroup(groupId);
-      visibleResult.meta.topPostShortcutMatched = true;
-      visibleResult.meta.stopReason = "最上方貼文未變更，跳過深度掃描";
-      if (cachedPosts.length) {
-        visibleResult.posts = cachedPosts.slice(0, clampTargetPostCount(STATE.config.maxPostsPerScan));
-        visibleResult.meta.parsedCount = visibleResult.posts.length;
-        visibleResult.meta.accumulatedCount = visibleResult.posts.length;
-      }
-      return visibleResult;
-    }
-
-    setLatestTopPostForGroup(groupId, topPost);
-    visibleResult.meta.topPostShortcutMatched = false;
-    return null;
-  }
-
-  // 在當前視窗與後續滾動視窗中累積貼文，直到足夠或達到保守上限。
-  async function collectPostsAcrossWindows() {
-    const targetPostCount = clampTargetPostCount(STATE.config.maxPostsPerScan);
-    const result = {
-      targetCount: targetPostCount,
-      mode: STATE.config.autoLoadMorePosts ? STATE.config.loadMoreMode : "off",
-      attempted: false,
-      attempts: 0,
-      maxWindowCount: STATE.config.autoLoadMorePosts ? getDynamicMaxWindows(targetPostCount) : 1,
+      targetPostCount,
+      result,
+      accumulated: [],
+      accumulatedKeys: new Set(),
+      scanCache: new WeakMap(),
+      maxWindows: result.maxWindowCount,
       stagnantWindows: 0,
-      stopReason: "",
-      beforeCount: 0,
-      afterCount: 0,
-      windowCount: 0,
-      candidateCount: 0,
-      cacheHitCount: 0,
-      freshExtractCount: 0,
-      parsedCount: 0,
-      accumulatedCount: 0,
-      filteredEmptyTextCount: 0,
-      filteredNonPostCount: 0,
-      filteredFeedSortControlCount: 0,
-      articleElementCount: 0,
-      postsWithPostIdCount: 0,
     };
-    const accumulated = [];
-    const accumulatedKeys = new Set();
-    const scanCache = new WeakMap();
-    const maxWindows = result.maxWindowCount;
-    let stagnantWindows = 0;
+  }
 
-    const initialCandidates = collectPostContainers(getCandidateCollectionLimit(targetPostCount));
-    result.beforeCount = initialCandidates.length;
-    result.afterCount = initialCandidates.length;
+  // 針對目前畫面視窗收集候選、抽取貼文並完成單視窗去重。
+  async function collectCurrentWindowPosts(targetPostCount, scanCache) {
+    const candidates = collectPostContainers(getCandidateCollectionLimit(targetPostCount));
+    const collected = await collectPostsFromCandidates(candidates, scanCache);
+    const posts = dedupeExtractedPosts(collected.posts, Number.MAX_SAFE_INTEGER);
 
-    // 若其他掃描流程正在載入更多貼文，這輪只吃當前視窗，避免互相打架。
-    if (STATE.isLoadingMorePosts) {
-      result.stopReason = "目前正在載入更多貼文，先使用當前視窗結果";
-      const initialCollected = await collectPostsFromCandidates(initialCandidates, scanCache);
-      result.cacheHitCount += initialCollected.meta.cacheHitCount;
-      result.freshExtractCount += initialCollected.meta.freshExtractCount;
-      result.filteredEmptyTextCount += initialCollected.meta.filteredEmptyTextCount;
-      result.filteredNonPostCount += initialCollected.meta.filteredNonPostCount;
-      result.filteredFeedSortControlCount += initialCollected.meta.filteredFeedSortControlCount;
-      result.articleElementCount += initialCollected.meta.articleElementCount;
-      result.postsWithPostIdCount += initialCollected.meta.postsWithPostIdCount;
-      const initialPosts = dedupeExtractedPosts(initialCollected.posts, targetPostCount);
-      return { posts: initialPosts, meta: result };
+    return {
+      candidates,
+      collected,
+      posts,
+    };
+  }
+
+  // 將單一視窗的新貼文併入累積結果，回傳本輪新增篇數。
+  function mergeWindowPostsIntoAccumulated(accumulated, accumulatedKeys, posts, targetPostCount) {
+    let addedThisWindow = 0;
+
+    for (const post of posts) {
+      const postKey = getPostKey(post);
+      if (!postKey || accumulatedKeys.has(postKey)) continue;
+
+      accumulatedKeys.add(postKey);
+      accumulated.push(post);
+      addedThisWindow += 1;
+
+      if (accumulated.length >= targetPostCount) break;
     }
 
-    const startY = window.scrollY;
-    STATE.isLoadingMorePosts = true;
+    return addedThisWindow;
+  }
 
-    try {
-      for (let windowIndex = 0; windowIndex < maxWindows; windowIndex += 1) {
-        result.windowCount = windowIndex + 1;
+  // 將單視窗掃描結果同步回跨視窗 meta。
+  function updateWindowCollectionMeta(result, windowIndex, candidates, collected, posts, accumulatedCount, stagnantWindows) {
+    result.windowCount = windowIndex + 1;
+    accumulateCollectedMetaCounts(result, collected.meta, {
+      candidateCountDelta: candidates.length,
+      parsedCountDelta: posts.length,
+      afterCount: candidates.length,
+    });
+    result.accumulatedCount = accumulatedCount;
+    result.stagnantWindows = stagnantWindows;
+  }
 
-        // 每個 window 代表「目前畫面可見範圍」的一次候選收集。
-        const candidates = collectPostContainers(getCandidateCollectionLimit(targetPostCount));
-        const collected = await collectPostsFromCandidates(candidates, scanCache);
-        const posts = dedupeExtractedPosts(collected.posts, Number.MAX_SAFE_INTEGER);
-        result.candidateCount += candidates.length;
-        result.cacheHitCount += collected.meta.cacheHitCount;
-        result.freshExtractCount += collected.meta.freshExtractCount;
-        result.parsedCount += posts.length;
-        result.afterCount = Math.max(result.afterCount, candidates.length);
-        result.filteredEmptyTextCount += collected.meta.filteredEmptyTextCount;
-        result.filteredNonPostCount += collected.meta.filteredNonPostCount;
-        result.filteredFeedSortControlCount += collected.meta.filteredFeedSortControlCount;
-        result.articleElementCount += collected.meta.articleElementCount;
-        result.postsWithPostIdCount += collected.meta.postsWithPostIdCount;
-
-        let addedThisWindow = 0;
-
-        for (const post of posts) {
-          const postKey = getPostKey(post);
-          if (!postKey || accumulatedKeys.has(postKey)) continue;
-          accumulatedKeys.add(postKey);
-          accumulated.push(post);
-          addedThisWindow += 1;
-
-          if (accumulated.length >= targetPostCount) break;
-        }
-
-        result.accumulatedCount = accumulated.length;
-        result.stagnantWindows = stagnantWindows;
-
-        if (accumulated.length >= targetPostCount) {
-          result.stopReason = "已達目標貼文數";
-          break;
-        }
-        if (!STATE.config.autoLoadMorePosts) {
-          result.stopReason = "已停用自動載入更多貼文";
-          break;
-        }
-
-        if (addedThisWindow === 0) {
-          // 沒有新增貼文時累計停滯視窗數，作為後續停止掃描的參考訊號。
-          stagnantWindows += 1;
-        } else {
-          stagnantWindows = 0;
-        }
-
-        result.stagnantWindows = stagnantWindows;
-
-        result.attempted = true;
-        result.attempts += 1;
-        if (STATE.config.loadMoreMode === "wheel") {
-          performWheelLikeLoad();
-        } else {
-          performScrollLoad();
-        }
-
-        // 給 Facebook 一點時間把新增內容補進 DOM。
-        await sleep(900);
-      }
-    } finally {
-      // 掃描結束後把視窗捲回原位，避免干擾使用者閱讀。
-      window.scrollTo(0, startY);
-      await sleep(160);
-      STATE.isLoadingMorePosts = false;
+  // 依目前狀態判斷是否應停止跨視窗掃描。
+  function getWindowCollectionStopReason(accumulatedCount, targetPostCount) {
+    if (accumulatedCount >= targetPostCount) {
+      return "已達目標貼文數";
     }
+    if (!STATE.config.autoLoadMorePosts) {
+      return "已停用自動載入更多貼文";
+    }
+
+    return "";
+  }
+
+  // 依設定執行下一輪 load-more 動作。
+  function performConfiguredLoadMore() {
+    if (STATE.config.loadMoreMode === "wheel") {
+      performWheelLikeLoad();
+      return;
+    }
+
+    performScrollLoad();
+  }
+
+  // 收尾跨視窗掃描的停止原因，讓 return 結構固定一致。
+  function finalizeWindowCollectionResult(context) {
+    const { result, accumulated, targetPostCount, maxWindows } = context;
 
     if (!result.stopReason) {
       if (accumulated.length >= targetPostCount) {
@@ -2131,6 +2317,199 @@
       posts: accumulated.slice(0, targetPostCount),
       meta: result,
     };
+  }
+
+  // 若上一輪仍在載入更多貼文，改成只吃當前視窗，避免多個掃描流程互搶。
+  async function collectCurrentWindowOnlyResult(context, initialCandidates) {
+    const { result, scanCache, targetPostCount } = context;
+
+    result.stopReason = "目前正在載入更多貼文，先使用當前視窗結果";
+    const initialCollected = await collectPostsFromCandidates(initialCandidates, scanCache);
+    accumulateCollectedMetaCounts(result, initialCollected.meta);
+    const initialPosts = dedupeExtractedPosts(initialCollected.posts, targetPostCount);
+
+    return {
+      posts: initialPosts,
+      meta: result,
+    };
+  }
+
+  // 只掃描目前可見視窗，用於最上方貼文快篩命中後的快速返回。
+  async function collectVisiblePostsOnly() {
+    const targetPostCount = clampTargetPostCount(STATE.config.maxPostsPerScan);
+    const candidates = collectPostContainers(getCandidateCollectionLimit(1));
+    const collected = await collectPostsFromCandidates(candidates, new WeakMap());
+    const posts = dedupeExtractedPosts(collected.posts, targetPostCount);
+
+    return {
+      posts,
+      meta: buildSingleWindowCollectedMeta({
+        targetCount: targetPostCount,
+        candidateCount: candidates.length,
+        collectedMeta: collected.meta,
+        parsedCount: posts.length,
+        accumulatedCount: posts.length,
+      }),
+    };
+  }
+
+  // 建立 top-post shortcut 的初始 meta 與關鍵資料。
+  function buildTopPostShortcutContext(visibleResult) {
+    const topPost = visibleResult.posts[0] || null;
+    const topPostKey = topPost ? getPostKey(topPost) : "";
+
+    visibleResult.meta.topPostShortcutUsed = true;
+    visibleResult.meta.topPostKey = topPostKey;
+
+    return {
+      visibleResult,
+      topPost,
+      topPostKey,
+    };
+  }
+
+  // 判斷本輪是否適合進行 top-post shortcut 比對。
+  function getTopPostShortcutBypassReason(reason, topPost, topPostKey) {
+    if (!STATE.config.autoLoadMorePosts) {
+      return "已停用自動載入更多貼文";
+    }
+    if (!shouldUseTopPostShortcut(reason)) {
+      return "skip_shortcut_check";
+    }
+    if (getCurrentFeedSortLabel() !== "新貼文") {
+      return "skip_shortcut_check";
+    }
+    if (!topPost || !topPostKey) {
+      return "skip_shortcut_check";
+    }
+
+    return "";
+  }
+
+  // 將 top-post shortcut 的 cache hit 結果套回可見視窗結果。
+  function applyTopPostShortcutCacheHit(visibleResult, groupId) {
+    const cachedPosts = getLatestScanPostsForGroup(groupId);
+    visibleResult.meta.topPostShortcutMatched = true;
+    visibleResult.meta.stopReason = "最上方貼文未變更，跳過深度掃描";
+
+    if (cachedPosts.length) {
+      visibleResult.posts = cachedPosts.slice(0, clampTargetPostCount(STATE.config.maxPostsPerScan));
+      visibleResult.meta.parsedCount = visibleResult.posts.length;
+      visibleResult.meta.accumulatedCount = visibleResult.posts.length;
+    }
+
+    return visibleResult;
+  }
+
+  // 將最新 top post snapshot 與 shortcut 判斷同步到結果上。
+  function resolveTopPostShortcutResult(reason, groupId, shortcutContext) {
+    const { visibleResult, topPost, topPostKey } = shortcutContext;
+    const bypassReason = getTopPostShortcutBypassReason(reason, topPost, topPostKey);
+
+    if (bypassReason === "已停用自動載入更多貼文") {
+      visibleResult.meta.stopReason = bypassReason;
+      return visibleResult;
+    }
+    if (bypassReason) {
+      visibleResult.meta.topPostShortcutMatched = false;
+      return null;
+    }
+
+    const previousTopPost = getLatestTopPostForGroup(groupId);
+    visibleResult.meta.previousTopPostKey = previousTopPost?.postKey || "";
+
+    if (!previousTopPost?.postKey) {
+      setLatestTopPostForGroup(groupId, topPost);
+      visibleResult.meta.topPostShortcutMatched = false;
+      return null;
+    }
+
+    if (previousTopPost.postKey === topPostKey) {
+      return applyTopPostShortcutCacheHit(visibleResult, groupId);
+    }
+
+    setLatestTopPostForGroup(groupId, topPost);
+    visibleResult.meta.topPostShortcutMatched = false;
+    return null;
+  }
+
+  // 先比對最上方最新貼文是否與上一輪相同；相同時直接跳過深度掃描。
+  async function collectPostsWithTopPostShortcut(reason, groupId) {
+    const visibleResult = await collectVisiblePostsOnly();
+    return resolveTopPostShortcutResult(reason, groupId, buildTopPostShortcutContext(visibleResult));
+  }
+
+  // 在當前視窗與後續滾動視窗中累積貼文，直到足夠或達到保守上限。
+  async function collectPostsAcrossWindows() {
+    const context = createWindowCollectionContext(clampTargetPostCount(STATE.config.maxPostsPerScan));
+    const {
+      targetPostCount,
+      result,
+      accumulated,
+      accumulatedKeys,
+      scanCache,
+      maxWindows,
+    } = context;
+    const initialCandidates = collectPostContainers(getCandidateCollectionLimit(targetPostCount));
+    result.beforeCount = initialCandidates.length;
+    result.afterCount = initialCandidates.length;
+
+    // 若其他掃描流程正在載入更多貼文，這輪只吃當前視窗，避免互相打架。
+    if (STATE.isLoadingMorePosts) {
+      return collectCurrentWindowOnlyResult(context, initialCandidates);
+    }
+
+    const startY = window.scrollY;
+    STATE.isLoadingMorePosts = true;
+
+    try {
+      for (let windowIndex = 0; windowIndex < maxWindows; windowIndex += 1) {
+        // 每個 window 代表「目前畫面可見範圍」的一次候選收集。
+        const { candidates, collected, posts } = await collectCurrentWindowPosts(targetPostCount, scanCache);
+        const addedThisWindow = mergeWindowPostsIntoAccumulated(
+          accumulated,
+          accumulatedKeys,
+          posts,
+          targetPostCount
+        );
+
+        if (addedThisWindow === 0) {
+          // 沒有新增貼文時累計停滯視窗數，作為後續停止掃描的參考訊號。
+          context.stagnantWindows += 1;
+        } else {
+          context.stagnantWindows = 0;
+        }
+
+        updateWindowCollectionMeta(
+          result,
+          windowIndex,
+          candidates,
+          collected,
+          posts,
+          accumulated.length,
+          context.stagnantWindows
+        );
+
+        result.stopReason = getWindowCollectionStopReason(accumulated.length, targetPostCount);
+        if (result.stopReason) {
+          break;
+        }
+
+        result.attempted = true;
+        result.attempts += 1;
+        performConfiguredLoadMore();
+
+        // 給 Facebook 一點時間把新增內容補進 DOM。
+        await sleep(900);
+      }
+    } finally {
+      // 掃描結束後把視窗捲回原位，避免干擾使用者閱讀。
+      window.scrollTo(0, startY);
+      await sleep(160);
+      STATE.isLoadingMorePosts = false;
+    }
+
+    return finalizeWindowCollectionResult(context);
   }
 
   // 模擬保守的載入更多貼文行為。
@@ -2160,11 +2539,338 @@
     window.scrollBy(0, deltaY);
   }
 
+  // 將單次候選收集的統計欄位累加到 scan meta。
+  function accumulateCollectedMetaCounts(targetMeta, sourceMeta, options = {}) {
+    const {
+      candidateCountDelta = 0,
+      parsedCountDelta = 0,
+      afterCount = 0,
+    } = options;
+
+    if (!targetMeta || !sourceMeta) return;
+
+    targetMeta.candidateCount += candidateCountDelta;
+    targetMeta.cacheHitCount += sourceMeta.cacheHitCount;
+    targetMeta.freshExtractCount += sourceMeta.freshExtractCount;
+    targetMeta.parsedCount += parsedCountDelta;
+    targetMeta.filteredEmptyTextCount += sourceMeta.filteredEmptyTextCount;
+    targetMeta.filteredNonPostCount += sourceMeta.filteredNonPostCount;
+    targetMeta.filteredFeedSortControlCount += sourceMeta.filteredFeedSortControlCount;
+    targetMeta.articleElementCount += sourceMeta.articleElementCount;
+    targetMeta.postsWithPostIdCount += sourceMeta.postsWithPostIdCount;
+    targetMeta.afterCount = Math.max(targetMeta.afterCount, afterCount);
+  }
+
+  // 建立單一可見視窗掃描的標準 meta。
+  function buildSingleWindowCollectedMeta({
+    targetCount,
+    candidateCount,
+    collectedMeta,
+    parsedCount,
+    accumulatedCount,
+  }) {
+    return normalizeCollectedMeta({
+      targetCount,
+      maxWindowCount: STATE.config.autoLoadMorePosts ? getDynamicMaxWindows(targetCount) : 1,
+      beforeCount: candidateCount,
+      afterCount: candidateCount,
+      windowCount: 1,
+      candidateCount,
+      cacheHitCount: collectedMeta.cacheHitCount,
+      freshExtractCount: collectedMeta.freshExtractCount,
+      parsedCount,
+      accumulatedCount,
+      filteredEmptyTextCount: collectedMeta.filteredEmptyTextCount,
+      filteredNonPostCount: collectedMeta.filteredNonPostCount,
+      filteredFeedSortControlCount: collectedMeta.filteredFeedSortControlCount,
+      articleElementCount: collectedMeta.articleElementCount,
+      postsWithPostIdCount: collectedMeta.postsWithPostIdCount,
+    });
+  }
+
+  // 建立 collected meta 的標準欄位形狀，避免不同掃描路徑回傳結構不一致。
+  function normalizeCollectedMeta(meta = {}) {
+    return {
+      targetCount: STATE.config.maxPostsPerScan,
+      mode: STATE.config.autoLoadMorePosts ? STATE.config.loadMoreMode : "off",
+      attempted: false,
+      attempts: 0,
+      beforeCount: 0,
+      afterCount: 0,
+      windowCount: 0,
+      candidateCount: 0,
+      cacheHitCount: 0,
+      freshExtractCount: 0,
+      parsedCount: 0,
+      accumulatedCount: 0,
+      maxWindowCount: 0,
+      stagnantWindows: 0,
+      stopReason: "",
+      filteredEmptyTextCount: 0,
+      filteredNonPostCount: 0,
+      filteredFeedSortControlCount: 0,
+      articleElementCount: 0,
+      postsWithPostIdCount: 0,
+      topPostShortcutUsed: false,
+      topPostShortcutMatched: false,
+      topPostKey: "",
+      previousTopPostKey: "",
+      ...meta,
+    };
+  }
+
+  // 建立掃描前的預設結果，讓無法掃描時仍有一致的回傳結構。
+  function createEmptyCollectedResult() {
+    return {
+      posts: [],
+      meta: normalizeCollectedMeta(),
+    };
+  }
+
+  // 收集本輪掃描貼文，並處理最上方貼文快篩後的快取寫回。
+  async function collectScanPosts(reason, supported, groupId) {
+    let collectedResult = createEmptyCollectedResult();
+    if (supported) {
+      const shortcutResult = await collectPostsWithTopPostShortcut(reason, groupId);
+      collectedResult = shortcutResult || await collectPostsAcrossWindows();
+    }
+
+    const uniquePosts = collectedResult.posts;
+    if (supported && uniquePosts.length) {
+      setLatestTopPostForGroup(groupId, uniquePosts[0]);
+    }
+    if (supported && !collectedResult.meta.topPostShortcutMatched) {
+      setLatestScanPostsForGroup(groupId, uniquePosts);
+    }
+
+    return {
+      collectedResult,
+      uniquePosts,
+    };
+  }
+
+  // 將單篇貼文套用 include / exclude / seen 判斷，整理成統一摘要格式。
+  function buildPostScanSummary(post, groupId, includeRules, excludeRules) {
+    const postKey = getPostKey(post);
+    const seen = hasSeenPost(groupId, post);
+    const includeResult = matchRules(includeRules, post.normalizedText);
+    const excludeResult = excludeRules.length
+      ? matchRules(excludeRules, post.normalizedText)
+      : { matched: false, rule: "" };
+
+    return {
+      ...post,
+      postKey,
+      seen,
+      includeRule: includeResult.rule,
+      excludeRule: excludeResult.rule,
+      eligible: includeResult.matched && !excludeResult.matched,
+    };
+  }
+
+  // 只有「未看過」且「符合規則」的摘要才進通知佇列。
+  function shouldNotifyScanSummary(summary) {
+    return Boolean(summary && !summary.seen && summary.eligible);
+  }
+
+  // 將貼文套用 include / exclude 與已看過判斷，整理成本輪摘要與通知佇列。
+  function summarizeScanPosts(uniquePosts, groupId, includeRules, excludeRules) {
+    const summaries = [];
+    const matchesToNotify = [];
+
+    for (const post of uniquePosts) {
+      const summary = buildPostScanSummary(post, groupId, includeRules, excludeRules);
+      summaries.push(summary);
+
+      // 已看過或不符合規則的貼文只保留在摘要，不進通知佇列。
+      if (shouldNotifyScanSummary(summary)) {
+        matchesToNotify.push(summary);
+      }
+    }
+
+    return {
+      summaries,
+      matchesToNotify,
+    };
+  }
+
+  // 依序發送本輪新命中的通知，並立即把已通知 key 納入 seen。
+  async function notifyMatchesAndMarkSeen(groupId, matchesToNotify) {
+    for (const item of matchesToNotify) {
+      await notifyForPost(item);
+      if (item.postKey) {
+        markPostSeen(groupId, item.postKey);
+      }
+    }
+  }
+
+  // 將本輪新命中的貼文寫入全域通知歷史。
+  function addMatchesToHistory(groupId, matchesToNotify) {
+    if (matchesToNotify.length) {
+      addMatchHistory(groupId, matchesToNotify);
+    }
+  }
+
+  // 即使沒有通知，也要把本輪掃到的貼文記成 seen，避免下一輪重複報警。
+  function markSummariesSeen(groupId, summaries) {
+    for (const item of summaries) {
+      if (item.postKey) {
+        markPostSeen(groupId, item.postKey);
+      }
+    }
+  }
+
+  // 讀取指定群組最新的 seen map，供 panel/debug 狀態重建使用。
+  function getLatestSeenMapForGroup(groupId) {
+    return getSeenPostGroupStore(groupId, getSeenPostsStore());
+  }
+
+  // 依本輪掃描結果送通知、更新命中歷史與已看過貼文狀態。
+  async function commitScanState(groupId, summaries, matchesToNotify) {
+    await notifyMatchesAndMarkSeen(groupId, matchesToNotify);
+    addMatchesToHistory(groupId, matchesToNotify);
+    markSummariesSeen(groupId, summaries);
+    return getLatestSeenMapForGroup(groupId);
+  }
+
+  // 將摘要貼文重新套用最新 seen map，供主面板顯示使用。
+  function buildLatestPostsState(summaries, latestSeenMap) {
+    return summaries.map((item) => ({
+      ...item,
+      seen: Boolean(item.postKey && latestSeenMap[item.postKey]),
+    }));
+  }
+
+  // 將本輪掃描結果整理成 debug / panel 共用的 latestScan 狀態物件。
+  function buildLatestScanState({
+    reason,
+    supported,
+    groupId,
+    collectedResult,
+    uniquePosts,
+    matchesToNotify,
+    baselineMode,
+  }) {
+    const collectedMeta = normalizeCollectedMeta(collectedResult.meta);
+
+    return {
+      reason,
+      supported,
+      groupId,
+      candidateCount: collectedMeta.candidateCount,
+      cacheHitCount: collectedMeta.cacheHitCount,
+      freshExtractCount: collectedMeta.freshExtractCount,
+      parsedCount: collectedMeta.parsedCount,
+      scannedCount: uniquePosts.length,
+      notifiedCount: matchesToNotify.length,
+      baselineMode,
+      targetCount: collectedMeta.targetCount,
+      loadMoreMode: collectedMeta.mode,
+      loadMoreAttempted: collectedMeta.attempted,
+      loadMoreAttempts: collectedMeta.attempts,
+      maxWindowCount: collectedMeta.maxWindowCount,
+      stagnantWindows: collectedMeta.stagnantWindows,
+      stopReason: collectedMeta.stopReason,
+      loadMoreBeforeCount: collectedMeta.beforeCount,
+      loadMoreAfterCount: collectedMeta.afterCount,
+      loadMoreWindowCount: collectedMeta.windowCount,
+      accumulatedCount: collectedMeta.accumulatedCount,
+      topPostShortcutUsed: collectedMeta.topPostShortcutUsed,
+      topPostShortcutMatched: collectedMeta.topPostShortcutMatched,
+      topPostKey: collectedMeta.topPostKey,
+      previousTopPostKey: collectedMeta.previousTopPostKey,
+      filteredEmptyTextCount: collectedMeta.filteredEmptyTextCount,
+      filteredNonPostCount: collectedMeta.filteredNonPostCount,
+      filteredFeedSortControlCount: collectedMeta.filteredFeedSortControlCount,
+      articleElementCount: collectedMeta.articleElementCount,
+      postsWithPostIdCount: collectedMeta.postsWithPostIdCount,
+      finishedAt: new Date().toISOString(),
+    };
+  }
+
+  // 建立單輪掃描需要的固定 context，集中 page/rule/baseline 判斷。
+  function createScanExecutionContext(reason) {
+    const supported = isSupportedGroupPage();
+    const groupId = getCurrentGroupId();
+
+    return {
+      reason,
+      supported,
+      groupId,
+      includeRules: parseKeywordInput(STATE.config.includeKeywords),
+      excludeRules: parseKeywordInput(STATE.config.excludeKeywords),
+      // 每個群組第一次掃描只建立 baseline，不對既有貼文發通知。
+      baselineMode: !STATE.initializedGroups.has(groupId),
+    };
+  }
+
+  // 依 scan context 執行本輪貼文收集與規則摘要。
+  async function collectScanExecutionData(scanContext) {
+    const { collectedResult, uniquePosts } = await collectScanPosts(
+      scanContext.reason,
+      scanContext.supported,
+      scanContext.groupId
+    );
+    const { summaries, matchesToNotify } = summarizeScanPosts(
+      uniquePosts,
+      scanContext.groupId,
+      scanContext.includeRules,
+      scanContext.excludeRules
+    );
+
+    return {
+      collectedResult,
+      uniquePosts,
+      summaries,
+      matchesToNotify,
+    };
+  }
+
+  // baseline 群組只需要在成功完成本輪掃描後註記一次。
+  function markGroupInitializedAfterScan(groupId, baselineMode) {
+    if (baselineMode) {
+      STATE.initializedGroups.add(groupId);
+    }
+  }
+
+  // 將成功完成的 scan 結果整理成 runtime state patch。
+  function buildSuccessfulScanRuntimeState(scanContext, scanData, latestSeenMap) {
+    return {
+      latestPosts: buildLatestPostsState(scanData.summaries, latestSeenMap),
+      latestScan: buildLatestScanState({
+        reason: scanContext.reason,
+        supported: scanContext.supported,
+        groupId: scanContext.groupId,
+        collectedResult: scanData.collectedResult,
+        uniquePosts: scanData.uniquePosts,
+        matchesToNotify: scanData.matchesToNotify,
+        baselineMode: scanContext.baselineMode,
+      }),
+      clearLatestNotification: !scanData.matchesToNotify.length,
+    };
+  }
+
+  // 套用成功掃描後的 runtime state，讓 runScan() 保持在 orchestration 層。
+  function applySuccessfulScanRuntimeState(runtimeState) {
+    STATE.latestPosts = runtimeState.latestPosts;
+    STATE.latestScan = runtimeState.latestScan;
+    if (runtimeState.clearLatestNotification) {
+      clearLatestNotificationState();
+    }
+    STATE.latestError = "";
+  }
+
+  // 單輪掃描失敗時的共用收尾。
+  function handleScanFailure(error) {
+    STATE.latestError = String(error && error.message ? error.message : error);
+    console.error("[fb-group-refresh] scan failed", error);
+  }
+
   // 主掃描流程：收集貼文、套用 include/exclude、去重並觸發通知。
   // 核心掃描入口：收集貼文、套規則、判斷 baseline、通知並更新 UI 狀態。
   async function runScan(reason) {
     if (STATE.config.paused) {
-      renderPanel();
+      requestPanelRender();
       return;
     }
     if (STATE.isScanning) return;
@@ -2172,229 +2878,171 @@
     STATE.isScanning = true;
 
     try {
-      const supported = isSupportedGroupPage();
-      const groupId = getCurrentGroupId();
-      const includeRules = parseKeywordInput(STATE.config.includeKeywords);
-      const excludeRules = parseKeywordInput(STATE.config.excludeKeywords);
-      let collectedResult = {
-        posts: [],
-        meta: {
-          mode: STATE.config.autoLoadMorePosts ? STATE.config.loadMoreMode : "off",
-          attempted: false,
-          attempts: 0,
-          beforeCount: 0,
-          afterCount: 0,
-          windowCount: 0,
-          candidateCount: 0,
-          parsedCount: 0,
-          accumulatedCount: 0,
-          topPostShortcutUsed: false,
-          topPostShortcutMatched: false,
-        },
-      };
-      if (supported) {
-        const shortcutResult = await collectPostsWithTopPostShortcut(reason, groupId);
-        collectedResult = shortcutResult || await collectPostsAcrossWindows();
-      }
-      const uniquePosts = collectedResult.posts;
-      if (supported && uniquePosts.length) {
-        setLatestTopPostForGroup(groupId, uniquePosts[0]);
-      }
-      if (supported && !collectedResult.meta.topPostShortcutMatched) {
-        setLatestScanPostsForGroup(groupId, uniquePosts);
-      }
-      const candidateCount = collectedResult.meta.candidateCount;
-      const parsedCount = collectedResult.meta.parsedCount;
-      const uniqueCount = uniquePosts.length;
-      // 每個群組第一次掃描只建立 baseline，不對既有貼文發通知。
-      const baselineMode = !STATE.initializedGroups.has(groupId);
-      const summaries = [];
-      const matchesToNotify = [];
+      const scanContext = createScanExecutionContext(reason);
+      const scanData = await collectScanExecutionData(scanContext);
 
-      for (const post of uniquePosts) {
-        const postKey = getPostKey(post);
-        const seen = hasSeenPost(groupId, post);
-        const includeResult = matchRules(includeRules, post.normalizedText);
-        const excludeResult = excludeRules.length
-          ? matchRules(excludeRules, post.normalizedText)
-          : { matched: false, rule: "" };
-
-        const summary = {
-          ...post,
-          postKey,
-          seen,
-          includeRule: includeResult.rule,
-          excludeRule: excludeResult.rule,
-          eligible: includeResult.matched && !excludeResult.matched,
-        };
-
-        summaries.push(summary);
-
-        // 已看過或不符合規則的貼文只保留在摘要，不進通知佇列。
-        if (seen) continue;
-        if (!summary.eligible) continue;
-
-        matchesToNotify.push(summary);
-      }
-
-      if (baselineMode) {
-        STATE.initializedGroups.add(groupId);
-      }
-
-      for (const item of matchesToNotify) {
-        await notifyForPost(item);
-        if (item.postKey) markPostSeen(groupId, item.postKey);
-      }
-
-      if (matchesToNotify.length) {
-        addMatchHistory(groupId, matchesToNotify);
-      }
-
-      // 即使沒有通知，也會把本輪掃到的貼文記成 seen，避免下一輪重複報警。
-      for (const item of summaries) {
-        if (item.postKey) {
-          markPostSeen(groupId, item.postKey);
-        }
-      }
-
-      const seenStoreAfterUpdate = getSeenPostsStore();
-      const latestSeenMap = seenStoreAfterUpdate[groupId] || {};
-
-      STATE.latestPosts = summaries.map((item) => ({
-        ...item,
-        seen: Boolean(item.postKey && latestSeenMap[item.postKey]),
-      }));
-      STATE.latestScan = {
-        reason,
-        supported,
-        groupId,
-        candidateCount,
-        cacheHitCount: collectedResult.meta.cacheHitCount ?? 0,
-        freshExtractCount: collectedResult.meta.freshExtractCount ?? 0,
-        parsedCount,
-        scannedCount: uniqueCount,
-        notifiedCount: matchesToNotify.length,
-        baselineMode,
-        targetCount: collectedResult.meta.targetCount ?? STATE.config.maxPostsPerScan,
-        loadMoreMode: collectedResult.meta.mode || STATE.config.loadMoreMode,
-        loadMoreAttempted: collectedResult.meta.attempted || false,
-        loadMoreAttempts: collectedResult.meta.attempts || 0,
-        maxWindowCount: collectedResult.meta.maxWindowCount ?? 0,
-        stagnantWindows: collectedResult.meta.stagnantWindows ?? 0,
-        stopReason: collectedResult.meta.stopReason || "",
-        loadMoreBeforeCount: collectedResult.meta.beforeCount ?? 0,
-        loadMoreAfterCount: collectedResult.meta.afterCount ?? 0,
-        loadMoreWindowCount: collectedResult.meta.windowCount ?? 0,
-        accumulatedCount: collectedResult.meta.accumulatedCount ?? 0,
-        topPostShortcutUsed: collectedResult.meta.topPostShortcutUsed || false,
-        topPostShortcutMatched: collectedResult.meta.topPostShortcutMatched || false,
-        topPostKey: collectedResult.meta.topPostKey || "",
-        previousTopPostKey: collectedResult.meta.previousTopPostKey || "",
-        filteredEmptyTextCount: collectedResult.meta.filteredEmptyTextCount ?? 0,
-        filteredNonPostCount: collectedResult.meta.filteredNonPostCount ?? 0,
-        filteredFeedSortControlCount: collectedResult.meta.filteredFeedSortControlCount ?? 0,
-        articleElementCount: collectedResult.meta.articleElementCount ?? 0,
-        postsWithPostIdCount: collectedResult.meta.postsWithPostIdCount ?? 0,
-        finishedAt: new Date().toISOString(),
-      };
-      if (!matchesToNotify.length) {
-        STATE.latestNotification = null;
-      }
-      STATE.latestError = "";
+      markGroupInitializedAfterScan(scanContext.groupId, scanContext.baselineMode);
+      const latestSeenMap = await commitScanState(
+        scanContext.groupId,
+        scanData.summaries,
+        scanData.matchesToNotify
+      );
+      applySuccessfulScanRuntimeState(
+        buildSuccessfulScanRuntimeState(scanContext, scanData, latestSeenMap)
+      );
     } catch (error) {
-      STATE.latestError = String(error && error.message ? error.message : error);
-      console.error("[fb-group-refresh] scan failed", error);
+      handleScanFailure(error);
     } finally {
       STATE.isScanning = false;
-      scheduleRefresh();
-      renderPanel();
+      rescheduleRefreshAndRender();
     }
   }
 
   // 對抽出的貼文再次去重，避免多個 selector 命中同一篇貼文。
   function dedupeExtractedPosts(posts, limit = STATE.config.maxPostsPerScan) {
-    const seen = new Set();
-    const results = [];
-
-    for (const post of posts) {
-      const key = getPostKey(post);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      results.push(post);
-    }
-
-    return results.slice(0, limit);
+    return collectUniquePostsByKey(posts, limit);
   }
 
-  // 通知分發與手動測試通知。
-  // 依目前設定分送桌面通知、ntfy 與 Discord Webhook。
-  async function notifyForPost(post) {
-    const title = "Facebook group match";
-    const compactBody = buildCompactNotificationBody(post);
-    const remoteBody = buildRemoteNotificationBody(post);
-    const statusParts = [];
+  // ==========================================================================
+  // Notifier
+  // ==========================================================================
 
-    STATE.latestNotification = {
+  // 通知分發與手動測試通知。
+  // 建立本輪通知開始前的 latestNotification 狀態。
+  function createPendingNotificationState(title, body, permalink) {
+    return {
       title,
-      body: remoteBody,
-      permalink: post.permalink,
+      body,
+      permalink,
       timestamp: new Date().toISOString(),
       status: "pending",
     };
+  }
 
-    // 本地通知優先走 Tampermonkey GM_notification，不依賴網站權限。
-    if (STATE.config.enableGmNotification) {
-      try {
-        GM_notification({
-          title,
-          text: compactBody,
-          timeout: 15000,
-        });
-        statusParts.push("gm_sent");
-      } catch (error) {
-        statusParts.push("gm_failed");
+  // 本地桌面通知優先走 Tampermonkey GM_notification。
+  function sendGmDesktopNotification(title, compactBody) {
+    if (!STATE.config.enableGmNotification) {
+      return "";
+    }
+
+    try {
+      GM_notification({
+        title,
+        text: compactBody,
+        timeout: 15000,
+      });
+      return "gm_sent";
+    } catch (error) {
+      return "gm_failed";
+    }
+  }
+
+  // 瀏覽器原生通知僅在已取得權限時額外送出。
+  function sendBrowserDesktopNotification(post, title, compactBody) {
+    if (!STATE.config.enableBrowserNotification || !("Notification" in window)) {
+      return "";
+    }
+
+    try {
+      if (Notification.permission !== "granted") {
+        return "";
       }
-    }
 
-    // 瀏覽器原生通知是額外選項，只有在權限已核准時才送。
-    if (STATE.config.enableBrowserNotification && "Notification" in window) {
-      try {
-        if (Notification.permission === "granted") {
-          const notification = new Notification(title, { body: compactBody });
-          if (post.permalink) {
-            notification.onclick = () => {
-              window.open(post.permalink, "_blank", "noopener,noreferrer");
-            };
-          }
-          statusParts.push("browser_sent");
-        }
-      } catch (error) {
-        statusParts.push("browser_failed");
+      const notification = new Notification(title, { body: compactBody });
+      if (post.permalink) {
+        notification.onclick = () => {
+          window.open(post.permalink, "_blank", "noopener,noreferrer");
+        };
       }
-    }
 
-    // ntfy 為 opt-in 遠端通知通道；未設定 topic 時會直接略過。
-    const ntfyStatus = await sendNtfyNotification({
-      title,
-      body: remoteBody,
-      clickUrl: post.permalink,
-    });
-    if (ntfyStatus !== "ntfy_skipped") {
-      statusParts.push(ntfyStatus);
+      return "browser_sent";
+    } catch (error) {
+      return "browser_failed";
     }
+  }
 
-    const discordStatus = await sendDiscordWebhookNotification({
-      title,
-      body: remoteBody,
-      clickUrl: post.permalink,
-    });
-    if (discordStatus !== "discord_skipped") {
-      statusParts.push(discordStatus);
-    }
+  // 只有實際送出或失敗的通道結果才加入狀態摘要。
+  function appendNotificationStatus(statusParts, status, skippedStatus = "") {
+    if (!status || status === skippedStatus) return;
+    statusParts.push(status);
+  }
+
+  // 更新 latestNotification 的最終狀態並持久化。
+  function finalizeLatestNotification(statusParts) {
+    if (!STATE.latestNotification) return;
 
     STATE.latestNotification.status = statusParts.length ? statusParts.join(", ") : "no_channel_sent";
+    setLatestNotificationStore(STATE.latestNotification);
+  }
 
-    saveJson(STORAGE_KEYS.lastNotification, STATE.latestNotification);
+  // 建立本輪通知內容與標題，供各通知通道共用。
+  function buildNotificationPayload(post) {
+    return {
+      title: "Facebook group match",
+      compactBody: buildCompactNotificationBody(post),
+      remoteBody: buildRemoteNotificationBody(post),
+    };
+  }
+
+  // 建立每個通知通道對應的執行器，避免 task 建立端維護 switch。
+  function buildNotificationChannelRunnerMap(post, payload) {
+    return {
+      gmDesktop: () => Promise.resolve(sendGmDesktopNotification(payload.title, payload.compactBody)),
+      browserDesktop: () => Promise.resolve(
+        sendBrowserDesktopNotification(post, payload.title, payload.compactBody)
+      ),
+      ntfy: () => sendNtfyNotification({
+        title: payload.title,
+        body: payload.remoteBody,
+        clickUrl: post.permalink,
+      }),
+      discord: () => sendDiscordWebhookNotification({
+        title: payload.title,
+        body: payload.remoteBody,
+        clickUrl: post.permalink,
+      }),
+    };
+  }
+
+  // 依通道定義與執行器建立單一通知 task。
+  function createNotificationChannelTask(definition, runnerMap) {
+    return {
+      channelId: definition.id,
+      skippedStatus: definition.skippedStatus,
+      run: runnerMap[definition.id] || (() => Promise.resolve("")),
+    };
+  }
+
+  // 建立本輪通知通道任務，讓 orchestration 不直接依序寫死所有通道。
+  function createNotificationChannelTasks(post, payload) {
+    const runnerMap = buildNotificationChannelRunnerMap(post, payload);
+    return NOTIFICATION_CHANNEL_DEFINITIONS.map((definition) => {
+      return createNotificationChannelTask(definition, runnerMap);
+    });
+  }
+
+  // 依序執行通知通道任務，並收集最終狀態摘要。
+  async function collectNotificationStatusParts(tasks) {
+    const statusParts = [];
+
+    for (const task of tasks) {
+      appendNotificationStatus(statusParts, await task.run(), task.skippedStatus);
+    }
+
+    return statusParts;
+  }
+
+  // 依目前設定分送桌面通知、ntfy 與 Discord Webhook。
+  async function notifyForPost(post) {
+    const payload = buildNotificationPayload(post);
+
+    setLatestNotificationState(
+      createPendingNotificationState(payload.title, payload.remoteBody, post.permalink)
+    );
+    const statusParts = await collectNotificationStatusParts(
+      createNotificationChannelTasks(post, payload)
+    );
+    finalizeLatestNotification(statusParts);
   }
 
   // 從設定視窗觸發的手動測試通知。
@@ -2407,27 +3055,115 @@
       permalink: location.href,
     };
     await notifyForPost(mockPost);
-    renderPanel();
+    requestPanelRender();
   }
 
-  // UI: 命中歷史視窗。
-  // 建立命中通知歷史視窗的 DOM；只建立一次。
-  function createHistoryModal() {
-    if (document.getElementById("fbgr-history-modal")) return;
+  // ==========================================================================
+  // UI / Modal
+  // ==========================================================================
 
+  // UI: 命中歷史視窗。
+  // 統一切換 overlay / modal 的顯示狀態。
+  function setOverlayVisibility(overlay, visible) {
+    if (!overlay) return;
+    overlay.style.display = visible ? "block" : "none";
+  }
+
+  // 依元素 id 顯示指定 overlay。
+  function showOverlayById(id) {
+    setOverlayVisibility(document.getElementById(id), true);
+  }
+
+  // 依元素 id 關閉指定 overlay。
+  function hideOverlayById(id) {
+    setOverlayVisibility(document.getElementById(id), false);
+  }
+
+  // 以共用樣式建立 overlay 容器並附加到頁面上。
+  function createOverlayElement({ id, zIndex, innerHtml, padding = 24 }) {
     const overlay = document.createElement("div");
-    overlay.id = "fbgr-history-modal";
+    overlay.id = id;
     overlay.style.cssText = [
       "display:none",
       "position:fixed",
       "inset:0",
-      "z-index:2147483644",
+      `z-index:${zIndex}`,
       "background:rgba(0,0,0,0.55)",
-      "padding:24px",
+      `padding:${padding}px`,
       "box-sizing:border-box",
     ].join(";");
+    overlay.innerHTML = innerHtml;
+    document.body.appendChild(overlay);
+    return overlay;
+  }
 
-    overlay.innerHTML = `
+  // 集中查找歷史紀錄視窗內會重複使用的節點。
+  function getHistoryModalElementRefs(overlay) {
+    if (!overlay) return null;
+
+    const refs = {
+      overlay,
+      contentEl: overlay.querySelector("#fbgr-history-content"),
+    };
+
+    if (!refs.contentEl) {
+      return null;
+    }
+
+    return refs;
+  }
+
+  // 歷史紀錄為空時的固定內容。
+  function renderEmptyHistoryHtml() {
+    return "<div>目前還沒有符合關鍵字的紀錄。</div>";
+  }
+
+  // 渲染單筆歷史紀錄卡片。
+  function renderHistoryEntryHtml(item, index) {
+    const linkHtml = item.permalink
+      ? `<a href="${escapeHtml(item.permalink)}" target="_blank" rel="noopener noreferrer" style="color:#93c5fd;">開啟貼文</a>`
+      : "";
+    const notifiedAtLabel = escapeHtml(formatNotificationTimestamp(item.notifiedAt));
+    const groupRow = renderHistoryFieldRow(
+      "社團",
+      escapeHtml(item.groupName || item.groupId || "(未知)")
+    );
+    const authorRow = renderHistoryFieldRow("作者", escapeHtml(item.author || "(無)"));
+    const keywordRow = renderHistoryFieldRow("關鍵字", escapeHtml(item.includeRule || "(無)"));
+    const notifiedAtRow = renderHistoryFieldRow("通知時間", notifiedAtLabel);
+    const contentRow = renderHistoryFieldRow(
+      "內容",
+      renderHighlightedHistoryContent(truncate(item.text, 220) || "(空白)", item.includeRule)
+    );
+
+    return `
+      <div style="padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
+        <div>#${index + 1}</div>
+        ${groupRow}
+        <div style="height:10px;"></div>
+        ${authorRow}
+        ${keywordRow}
+        ${notifiedAtRow}
+        ${contentRow}
+        ${linkHtml ? `<div style="margin-top:6px;">${linkHtml}</div>` : ""}
+      </div>
+    `;
+  }
+
+  // 將整份歷史紀錄資料轉成視窗內容 HTML。
+  function renderHistoryModalContentHtml(displayHistory) {
+    if (!displayHistory.length) {
+      return renderEmptyHistoryHtml();
+    }
+
+    return displayHistory.map((item, index) => {
+      return renderHistoryEntryHtml(item, index);
+    }).join("");
+  }
+
+  // 建立歷史紀錄 modal 的固定外層 HTML。
+  function renderHistoryModalShellHtml() {
+    return `
       <div style="max-width:720px;margin:40px auto 0 auto;background:#111827;color:#f9fafb;border:1px solid #4b5563;border-radius:14px;padding:16px;box-shadow:0 18px 40px rgba(0,0,0,0.4);font-family:Consolas, 'Courier New', monospace;">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px;">
           <div style="font-size:16px;font-weight:bold;">符合關鍵字紀錄</div>
@@ -2439,286 +3175,292 @@
         <div id="fbgr-history-content" style="display:grid;gap:10px;max-height:70vh;overflow:auto;"></div>
       </div>
     `;
+  }
 
-    document.body.appendChild(overlay);
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) {
-        closeHistoryModal();
-      }
-    });
-    overlay.querySelector("#fbgr-history-clear").addEventListener("click", () => {
+  // 綁定歷史紀錄 modal 的互動事件。
+  function bindHistoryModalEventHandlers(overlay) {
+    if (!overlay) return;
+
+    overlay.querySelector("#fbgr-history-clear")?.addEventListener("click", () => {
       if (!window.confirm("確定要清空所有符合關鍵字紀錄嗎？")) return;
       clearMatchHistory();
       openHistoryModal();
     });
-    overlay.querySelector("#fbgr-history-close").addEventListener("click", closeHistoryModal);
+    overlay.querySelector("#fbgr-history-close")?.addEventListener("click", closeHistoryModal);
+  }
+
+  // 建立命中通知歷史視窗的 DOM；只建立一次。
+  function createHistoryModal() {
+    if (document.getElementById("fbgr-history-modal")) return;
+
+    const overlay = createOverlayElement({
+      id: "fbgr-history-modal",
+      zIndex: 2147483644,
+      innerHtml: renderHistoryModalShellHtml(),
+    });
+    bindHistoryModalEventHandlers(overlay);
   }
 
   // 讀取全域命中歷史並渲染到視窗中。
   function openHistoryModal() {
     createHistoryModal();
     const overlay = document.getElementById("fbgr-history-modal");
-    const content = overlay?.querySelector("#fbgr-history-content");
-    if (!overlay || !content) return;
+    const historyRefs = getHistoryModalElementRefs(overlay);
+    if (!historyRefs) return;
 
     const displayHistory = getMatchHistoryStore();
-
-    if (!displayHistory.length) {
-      content.innerHTML = "<div>目前還沒有符合關鍵字的紀錄。</div>";
-    } else {
-      content.innerHTML = displayHistory
-        .map((item, index) => {
-          const linkHtml = item.permalink
-            ? `<a href="${escapeHtml(item.permalink)}" target="_blank" rel="noopener noreferrer" style="color:#93c5fd;">開啟貼文</a>`
-            : "";
-          const notifiedAtLabel = escapeHtml(formatNotificationTimestamp(item.notifiedAt));
-          const groupRow = renderHistoryFieldRow(
-            "社團",
-            escapeHtml(item.groupName || item.groupId || "(未知)")
-          );
-          const authorRow = renderHistoryFieldRow("作者", escapeHtml(item.author || "(無)"));
-          const keywordRow = renderHistoryFieldRow("關鍵字", escapeHtml(item.includeRule || "(無)"));
-          const notifiedAtRow = renderHistoryFieldRow("通知時間", notifiedAtLabel);
-          const contentRow = renderHistoryFieldRow(
-            "內容",
-            renderHighlightedHistoryContent(truncate(item.text, 220) || "(空白)", item.includeRule)
-          );
-          return `
-            <div style="padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
-              <div>#${index + 1}</div>
-              ${groupRow}
-              <div style="height:10px;"></div>
-              ${authorRow}
-              ${keywordRow}
-              ${notifiedAtRow}
-              ${contentRow}
-              ${linkHtml ? `<div style="margin-top:6px;">${linkHtml}</div>` : ""}
-            </div>
-          `;
-        })
-        .join("");
-    }
-
-    overlay.style.display = "block";
+    historyRefs.contentEl.innerHTML = renderHistoryModalContentHtml(displayHistory);
+    setOverlayVisibility(historyRefs.overlay, true);
   }
 
   // 關閉命中通知歷史視窗。
   function closeHistoryModal() {
-    const overlay = document.getElementById("fbgr-history-modal");
-    if (overlay) overlay.style.display = "none";
+    hideOverlayById("fbgr-history-modal");
   }
 
-  // UI: include 規則說明視窗。
-  // 建立 include 規則說明視窗，解釋 OR / AND 的輸入方式。
-  function createIncludeHelpModal() {
-    if (document.getElementById("fbgr-include-help-modal")) return;
-
-    const overlay = document.createElement("div");
-    overlay.id = "fbgr-include-help-modal";
-    overlay.style.cssText = [
-      "display:none",
-      "position:fixed",
-      "inset:0",
-      "z-index:2147483646",
-      "background:rgba(0,0,0,0.55)",
-      "padding:24px",
-      "box-sizing:border-box",
-    ].join(";");
-
-    overlay.innerHTML = `
-      <div style="max-width:520px;margin:40px auto 0 auto;background:#111827;color:#f9fafb;border:1px solid #4b5563;border-radius:14px;padding:16px;box-shadow:0 18px 40px rgba(0,0,0,0.4);font-family:Consolas, 'Courier New', monospace;">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px;">
-          <div style="font-size:16px;font-weight:bold;">關鍵字輸入規則</div>
-          <button id="fbgr-include-help-close" style="padding:4px 8px;cursor:pointer;">關閉</button>
+  const HELP_MODAL_DEFINITIONS = Object.freeze({
+    include: {
+      overlayId: "fbgr-include-help-modal",
+      title: "關鍵字輸入規則",
+      closeButtonId: "fbgr-include-help-close",
+      zIndex: 2147483646,
+      bodyHtml: `
+        <div style="display:grid;gap:6px;">
+          <div><code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">;</code> 表示 <strong>OR</strong></div>
+          <div>空格表示 <strong>AND</strong></div>
         </div>
-        <div style="display:grid;gap:14px;line-height:1.6;">
-          <div style="display:grid;gap:6px;">
-            <div><code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">;</code> 表示 <strong>OR</strong></div>
-            <div>空格表示 <strong>AND</strong></div>
-          </div>
-          <div style="display:grid;gap:8px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
-            <div style="font-weight:bold;">示例 1</div>
-            <div><code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;">搖滾;6880;5880</code></div>
-            <div>只要出現 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">6880</code> 或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">5880</code> 就通知。</div>
-          </div>
-          <div style="display:grid;gap:8px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
-            <div style="font-weight:bold;">示例 2</div>
-            <div><code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;">搖滾 6880;搖滾 5880</code></div>
-            <div>代表 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 且 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">6880</code>，或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 且 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">5880</code> 才通知。</div>
-          </div>
-          <div>排除關鍵字也使用同樣規則。</div>
+        <div style="display:grid;gap:8px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
+          <div style="font-weight:bold;">示例 1</div>
+          <div><code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;">搖滾;6880;5880</code></div>
+          <div>只要出現 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">6880</code> 或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">5880</code> 就通知。</div>
         </div>
-      </div>
-    `;
+        <div style="display:grid;gap:8px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
+          <div style="font-weight:bold;">示例 2</div>
+          <div><code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;">搖滾 6880;搖滾 5880</code></div>
+          <div>代表 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 且 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">6880</code>，或 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">搖滾</code> 且 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">5880</code> 才通知。</div>
+        </div>
+        <div>排除關鍵字也使用同樣規則。</div>
+      `,
+    },
+    ntfy: {
+      overlayId: "fbgr-ntfy-help-modal",
+      title: "ntfy 說明",
+      closeButtonId: "fbgr-ntfy-help-close",
+      bodyHtml: `
+        <div>不填 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy topic</code> 也可以使用，腳本仍會透過桌面通知在電腦上提醒你。</div>
+        <div>如果希望手機也同步收到提醒，可以另外設定 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy</code>。</div>
+        <div style="display:grid;gap:6px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
+          <div style="font-weight:bold;">建議步驟</div>
+          <div>1. 在手機上安裝 ntfy App</div>
+          <div>2. 在 App 內按 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">+</code>，輸入 topic，例如 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">my-facebook-alerts</code></div>
+          <div>3. 建議使用英文字母、數字、減號或底線</div>
+          <div>4. 回到電腦上的 Facebook 頁面，在腳本面板中按「設定」</div>
+          <div>5. 在 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy topic</code> 輸入完全相同的 topic</div>
+          <div>6. 按一次「測試通知」，確認手機 App 是否有收到通知；通知可能會有些許延遲</div>
+        </div>
+        <div style="font-size:12px;color:#d1d5db;">若你另外修改了刷新秒數、掃描貼文數等其他設定，再按「儲存設定」。</div>
+      `,
+    },
+    discord: {
+      overlayId: "fbgr-discord-help-modal",
+      title: "Discord Webhook 說明",
+      closeButtonId: "fbgr-discord-help-close",
+      bodyHtml: `
+        <div>不填 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">Discord Webhook URL</code> 也可以使用，腳本仍會透過桌面通知在電腦上提醒你。</div>
+        <div>如果希望通知直接送到 Discord 頻道，可以另外設定 Discord Webhook。</div>
+        <div style="display:grid;gap:6px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
+          <div style="font-weight:bold;">建議步驟</div>
+          <div>1. 在 Discord 選擇目標頻道，進入「編輯頻道」</div>
+          <div>2. 點選「整合」→「Webhooks」→「新 Webhook」</div>
+          <div>3. 複製 Webhook URL</div>
+          <div>4. 回到電腦上的 Facebook 頁面，在腳本面板中按「設定」</div>
+          <div>5. 在 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">Discord Webhook URL</code> 貼上剛剛複製的網址</div>
+          <div>6. 按一次「測試通知」，確認 Discord 頻道是否有收到通知；通知可能會有些許延遲</div>
+        </div>
+        <div style="font-size:12px;color:#d1d5db;">留空則不會傳送 Discord 通知。</div>
+      `,
+    },
+  });
 
-    document.body.appendChild(overlay);
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) {
-        closeIncludeHelpModal();
-      }
+  // 建立共用的 help modal 外層骨架，讓多個說明視窗只需要關心內容本身。
+  function createHelpModalShell({
+    overlayId,
+    title,
+    bodyHtml,
+    closeButtonId,
+    zIndex = 2147483647,
+    maxWidth = 520,
+  }) {
+    if (document.getElementById(overlayId)) return;
+
+    const overlay = createOverlayElement({
+      id: overlayId,
+      zIndex,
+      innerHtml: `
+        <div style="max-width:${maxWidth}px;margin:40px auto 0 auto;background:#111827;color:#f9fafb;border:1px solid #4b5563;border-radius:14px;padding:16px;box-shadow:0 18px 40px rgba(0,0,0,0.4);font-family:Consolas, 'Courier New', monospace;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px;">
+            <div style="font-size:16px;font-weight:bold;">${title}</div>
+            <button id="${closeButtonId}" style="padding:4px 8px;cursor:pointer;">關閉</button>
+          </div>
+          <div style="display:grid;gap:12px;line-height:1.6;">
+            ${bodyHtml}
+          </div>
+        </div>
+      `,
     });
-    overlay.querySelector("#fbgr-include-help-close").addEventListener("click", closeIncludeHelpModal);
-  }
-
-  // 顯示 include 規則說明視窗。
-  function openIncludeHelpModal() {
-    createIncludeHelpModal();
-    const overlay = document.getElementById("fbgr-include-help-modal");
-    if (overlay) overlay.style.display = "block";
-  }
-
-  // 關閉 include 規則說明視窗。
-  function closeIncludeHelpModal() {
-    const overlay = document.getElementById("fbgr-include-help-modal");
-    if (overlay) overlay.style.display = "none";
-  }
-
-  // UI: ntfy 說明視窗。
-  // 建立 ntfy 說明視窗，說明 topic 的用途與基本設定步驟。
-  function createNtfyHelpModal() {
-    if (document.getElementById("fbgr-ntfy-help-modal")) return;
-
-    const overlay = document.createElement("div");
-    overlay.id = "fbgr-ntfy-help-modal";
-    overlay.style.cssText = [
-      "display:none",
-      "position:fixed",
-      "inset:0",
-      "z-index:2147483647",
-      "background:rgba(0,0,0,0.55)",
-      "padding:24px",
-      "box-sizing:border-box",
-    ].join(";");
-
-    overlay.innerHTML = `
-      <div style="max-width:520px;margin:40px auto 0 auto;background:#111827;color:#f9fafb;border:1px solid #4b5563;border-radius:14px;padding:16px;box-shadow:0 18px 40px rgba(0,0,0,0.4);font-family:Consolas, 'Courier New', monospace;">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px;">
-          <div style="font-size:16px;font-weight:bold;">ntfy 說明</div>
-          <button id="fbgr-ntfy-help-close" style="padding:4px 8px;cursor:pointer;">關閉</button>
-        </div>
-        <div style="display:grid;gap:12px;line-height:1.6;">
-          <div>不填 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy topic</code> 也可以使用，腳本仍會透過桌面通知在電腦上提醒你。</div>
-          <div>如果希望手機也同步收到提醒，可以另外設定 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy</code>。</div>
-          <div style="display:grid;gap:6px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
-            <div style="font-weight:bold;">建議步驟</div>
-            <div>1. 在手機上安裝 ntfy App</div>
-            <div>2. 在 App 內按 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">+</code>，輸入 topic，例如 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">my-facebook-alerts</code></div>
-            <div>3. 建議使用英文字母、數字、減號或底線</div>
-            <div>4. 回到電腦上的 Facebook 頁面，在腳本面板中按「設定」</div>
-            <div>5. 在 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy topic</code> 輸入完全相同的 topic</div>
-            <div>6. 按一次「測試通知」，確認手機 App 是否有收到通知；通知可能會有些許延遲</div>
-          </div>
-          <div style="font-size:12px;color:#d1d5db;">若你另外修改了刷新秒數、掃描貼文數等其他設定，再按「儲存設定」。</div>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(overlay);
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) {
-        closeNtfyHelpModal();
-      }
+    overlay.querySelector(`#${closeButtonId}`)?.addEventListener("click", () => {
+      hideOverlayById(overlayId);
     });
-    overlay.querySelector("#fbgr-ntfy-help-close").addEventListener("click", closeNtfyHelpModal);
   }
 
-  // 顯示 ntfy 說明視窗。
-  function openNtfyHelpModal() {
-    createNtfyHelpModal();
-    const overlay = document.getElementById("fbgr-ntfy-help-modal");
-    if (overlay) overlay.style.display = "block";
+  // 依定義建立指定 help modal。
+  function createHelpModal(kind) {
+    const definition = HELP_MODAL_DEFINITIONS[kind];
+    if (!definition) return;
+    createHelpModalShell(definition);
   }
 
-  // 關閉 ntfy 說明視窗。
-  function closeNtfyHelpModal() {
-    const overlay = document.getElementById("fbgr-ntfy-help-modal");
-    if (overlay) overlay.style.display = "none";
+  // 依定義建立並顯示指定 help modal。
+  function openHelpModal(kind) {
+    const definition = HELP_MODAL_DEFINITIONS[kind];
+    if (!definition) return;
+
+    createHelpModal(kind);
+    showOverlayById(definition.overlayId);
   }
 
-  // UI: Discord Webhook 說明視窗。
-  // 建立 Discord Webhook 說明視窗，說明 URL 的用途與基本設定步驟。
-  function createDiscordHelpModal() {
-    if (document.getElementById("fbgr-discord-help-modal")) return;
-
-    const overlay = document.createElement("div");
-    overlay.id = "fbgr-discord-help-modal";
-    overlay.style.cssText = [
-      "display:none",
-      "position:fixed",
-      "inset:0",
-      "z-index:2147483647",
-      "background:rgba(0,0,0,0.55)",
-      "padding:24px",
-      "box-sizing:border-box",
-    ].join(";");
-
-    overlay.innerHTML = `
-      <div style="max-width:520px;margin:40px auto 0 auto;background:#111827;color:#f9fafb;border:1px solid #4b5563;border-radius:14px;padding:16px;box-shadow:0 18px 40px rgba(0,0,0,0.4);font-family:Consolas, 'Courier New', monospace;">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px;">
-          <div style="font-size:16px;font-weight:bold;">Discord Webhook 說明</div>
-          <button id="fbgr-discord-help-close" style="padding:4px 8px;cursor:pointer;">關閉</button>
-        </div>
-        <div style="display:grid;gap:12px;line-height:1.6;">
-          <div>不填 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">Discord Webhook URL</code> 也可以使用，腳本仍會透過桌面通知在電腦上提醒你。</div>
-          <div>如果希望通知直接送到 Discord 頻道，可以另外設定 Discord Webhook。</div>
-          <div style="display:grid;gap:6px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
-            <div style="font-weight:bold;">建議步驟</div>
-            <div>1. 在 Discord 選擇目標頻道，進入「編輯頻道」</div>
-            <div>2. 點選「整合」→「Webhooks」→「新 Webhook」</div>
-            <div>3. 複製 Webhook URL</div>
-            <div>4. 回到電腦上的 Facebook 頁面，在腳本面板中按「設定」</div>
-            <div>5. 在 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">Discord Webhook URL</code> 貼上剛剛複製的網址</div>
-            <div>6. 按一次「測試通知」，確認 Discord 頻道是否有收到通知；通知可能會有些許延遲</div>
-          </div>
-          <div style="font-size:12px;color:#d1d5db;">留空則不會傳送 Discord 通知。</div>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(overlay);
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) {
-        closeDiscordHelpModal();
-      }
+  // 預先建立所有 help modal，讓後續開啟動作只剩顯示切換。
+  function createAllHelpModals() {
+    Object.keys(HELP_MODAL_DEFINITIONS).forEach((kind) => {
+      createHelpModal(kind);
     });
-    overlay.querySelector("#fbgr-discord-help-close").addEventListener("click", closeDiscordHelpModal);
-  }
-
-  // 顯示 Discord Webhook 說明視窗。
-  function openDiscordHelpModal() {
-    createDiscordHelpModal();
-    const overlay = document.getElementById("fbgr-discord-help-modal");
-    if (overlay) overlay.style.display = "block";
-  }
-
-  // 關閉 Discord Webhook 說明視窗。
-  function closeDiscordHelpModal() {
-    const overlay = document.getElementById("fbgr-discord-help-modal");
-    if (overlay) overlay.style.display = "none";
   }
 
   // UI: 設定視窗與刷新模式切換。
-  // 建立設定視窗，集中管理 refresh、load more、ntfy 與 Discord Webhook。
-  function createSettingsModal() {
-    if (document.getElementById("fbgr-settings-modal")) return;
+  // 集中查找設定視窗內會重複使用的欄位節點。
+  function getSettingsModalElementRefs(overlay) {
+    if (!overlay) return null;
 
-    const overlay = document.createElement("div");
-    overlay.id = "fbgr-settings-modal";
-    overlay.style.cssText = [
-      "display:none",
-      "position:fixed",
-      "inset:0",
-      "z-index:2147483645",
-      "background:rgba(0,0,0,0.55)",
-      "padding:24px",
-      "box-sizing:border-box",
-    ].join(";");
+    const refs = {
+      overlay,
+      jitterEnabledEl: overlay.querySelector("#fbgr-jitter-enabled"),
+      autoLoadMoreEl: overlay.querySelector("#fbgr-auto-load-more"),
+      fixedRefreshEl: overlay.querySelector("#fbgr-fixed-refresh"),
+      minRefreshEl: overlay.querySelector("#fbgr-refresh-min"),
+      maxRefreshEl: overlay.querySelector("#fbgr-refresh-max"),
+      maxPostsPerScanEl: overlay.querySelector("#fbgr-max-posts-per-scan"),
+      ntfyTopicEl: overlay.querySelector("#fbgr-ntfy-topic"),
+      discordWebhookEl: overlay.querySelector("#fbgr-discord-webhook"),
+      jitterWrapEl: overlay.querySelector("#fbgr-jitter-wrap"),
+      fixedWrapEl: overlay.querySelector("#fbgr-fixed-wrap"),
+    };
 
-    overlay.innerHTML = `
+    if (
+      !refs.jitterEnabledEl ||
+      !refs.autoLoadMoreEl ||
+      !refs.fixedRefreshEl ||
+      !refs.minRefreshEl ||
+      !refs.maxRefreshEl ||
+      !refs.maxPostsPerScanEl ||
+      !refs.ntfyTopicEl ||
+      !refs.discordWebhookEl ||
+      !refs.jitterWrapEl ||
+      !refs.fixedWrapEl
+    ) {
+      return null;
+    }
+
+    return refs;
+  }
+
+  // 從設定視窗欄位讀出目前草稿值，並做基本正規化。
+  function readSettingsModalDraft(settingsRefs) {
+    if (!settingsRefs) return null;
+
+    return {
+      jitterEnabled: settingsRefs.jitterEnabledEl.checked,
+      ntfyTopic: normalizeText(settingsRefs.ntfyTopicEl.value),
+      discordWebhook: normalizeText(settingsRefs.discordWebhookEl.value),
+      autoLoadMorePosts: settingsRefs.autoLoadMoreEl.checked,
+      minRefreshSec: Math.max(5, Math.floor(Number(settingsRefs.minRefreshEl.value) || STATE.config.minRefreshSec)),
+      maxRefreshSec: Math.max(5, Math.floor(Number(settingsRefs.maxRefreshEl.value) || STATE.config.maxRefreshSec)),
+      fixedRefreshSec: Math.max(5, Math.floor(Number(settingsRefs.fixedRefreshEl.value) || STATE.config.fixedRefreshSec)),
+      maxPostsPerScan: clampTargetPostCount(settingsRefs.maxPostsPerScanEl.value),
+    };
+  }
+
+  // 將設定草稿套回執行期 state 並寫入持久化儲存。
+  function applySettingsModalDraft(draft) {
+    if (!draft) return;
+
+    STATE.config.jitterEnabled = draft.jitterEnabled;
+    STATE.config.ntfyTopic = draft.ntfyTopic;
+    STATE.config.discordWebhook = draft.discordWebhook;
+    STATE.config.autoLoadMorePosts = draft.autoLoadMorePosts;
+    STATE.config.loadMoreMode = DEFAULT_CONFIG.loadMoreMode;
+    STATE.config.minRefreshSec = draft.minRefreshSec;
+    STATE.config.maxRefreshSec = draft.maxRefreshSec;
+    STATE.config.fixedRefreshSec = draft.fixedRefreshSec;
+    STATE.config.maxPostsPerScan = draft.maxPostsPerScan;
+    saveRefreshSettings();
+  }
+
+  // 將目前設定回填到設定視窗欄位。
+  function populateSettingsModalFields(settingsRefs) {
+    if (!settingsRefs) return;
+
+    settingsRefs.jitterEnabledEl.checked = STATE.config.jitterEnabled;
+    settingsRefs.ntfyTopicEl.value = STATE.config.ntfyTopic;
+    settingsRefs.discordWebhookEl.value = STATE.config.discordWebhook;
+    settingsRefs.autoLoadMoreEl.checked = STATE.config.autoLoadMorePosts;
+    settingsRefs.minRefreshEl.value = String(STATE.config.minRefreshSec);
+    settingsRefs.maxRefreshEl.value = String(STATE.config.maxRefreshSec);
+    settingsRefs.fixedRefreshEl.value = String(STATE.config.fixedRefreshSec);
+    settingsRefs.maxPostsPerScanEl.value = String(STATE.config.maxPostsPerScan);
+  }
+
+  // 設定視窗中的測試通知只暫存通知端點，不修改其他刷新設定。
+  function handleSettingsTestNotification(settingsRefs) {
+    const draft = readSettingsModalDraft(settingsRefs);
+    if (!draft) return;
+
+    saveNtfyTopicSetting(draft.ntfyTopic);
+    saveDiscordWebhookSetting(draft.discordWebhook);
+    sendTestNotification();
+  }
+
+  // 儲存設定視窗中的所有欄位，並同步重排 refresh 顯示。
+  function handleSettingsSave(settingsRefs) {
+    const draft = readSettingsModalDraft(settingsRefs);
+    if (!draft) return;
+
+    applySettingsModalDraft(draft);
+    closeSettingsModal();
+    rescheduleRefreshAndRender();
+  }
+
+  // 綁定設定視窗的互動事件，讓 createSettingsModal() 聚焦在 DOM 建立。
+  function bindSettingsModalEventHandlers(overlay, settingsRefs) {
+    if (!overlay || !settingsRefs) return;
+
+    overlay.querySelector("#fbgr-settings-cancel")?.addEventListener("click", closeSettingsModal);
+    settingsRefs.jitterEnabledEl.addEventListener("change", renderSettingsMode);
+    overlay.querySelector("#fbgr-ntfy-help")?.addEventListener("click", () => openHelpModal("ntfy"));
+    overlay.querySelector("#fbgr-discord-help")?.addEventListener("click", () => openHelpModal("discord"));
+    overlay.querySelector("#fbgr-settings-test")?.addEventListener("click", () => {
+      handleSettingsTestNotification(settingsRefs);
+    });
+    overlay.querySelector("#fbgr-settings-save")?.addEventListener("click", () => {
+      handleSettingsSave(settingsRefs);
+    });
+  }
+
+  // 建立設定視窗的固定外層 HTML。
+  function renderSettingsModalShellHtml() {
+    return `
       <div style="max-width:520px;margin:40px auto 0 auto;background:#111827;color:#f9fafb;border:1px solid #4b5563;border-radius:14px;padding:16px;box-shadow:0 18px 40px rgba(0,0,0,0.4);font-family:Consolas, 'Courier New', monospace;">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px;">
           <div style="font-size:16px;font-weight:bold;">設定</div>
-          <button id="fbgr-settings-close" style="padding:4px 8px;cursor:pointer;">關閉</button>
         </div>
         <div style="display:grid;gap:12px;">
           <label style="display:flex;align-items:center;gap:8px;">
@@ -2774,116 +3516,119 @@
         </div>
       </div>
     `;
+  }
 
-    document.body.appendChild(overlay);
+  // 建立設定視窗，集中管理 refresh、load more、ntfy 與 Discord Webhook。
+  function createSettingsModal() {
+    if (document.getElementById("fbgr-settings-modal")) return;
 
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) {
-        closeSettingsModal();
-      }
+    const overlay = createOverlayElement({
+      id: "fbgr-settings-modal",
+      zIndex: 2147483645,
+      innerHtml: renderSettingsModalShellHtml(),
     });
-
-    overlay.querySelector("#fbgr-settings-close").addEventListener("click", closeSettingsModal);
-    overlay.querySelector("#fbgr-settings-cancel").addEventListener("click", closeSettingsModal);
-    overlay.querySelector("#fbgr-jitter-enabled").addEventListener("change", renderSettingsMode);
-    overlay.querySelector("#fbgr-ntfy-help").addEventListener("click", openNtfyHelpModal);
-    overlay.querySelector("#fbgr-discord-help").addEventListener("click", openDiscordHelpModal);
-    overlay.querySelector("#fbgr-settings-test").addEventListener("click", () => {
-      const ntfyTopic = normalizeText(overlay.querySelector("#fbgr-ntfy-topic").value);
-      const discordWebhook = normalizeText(overlay.querySelector("#fbgr-discord-webhook").value);
-      saveNtfyTopicSetting(ntfyTopic);
-      saveDiscordWebhookSetting(discordWebhook);
-      sendTestNotification();
-    });
-    overlay.querySelector("#fbgr-settings-save").addEventListener("click", () => {
-      const jitterEnabled = overlay.querySelector("#fbgr-jitter-enabled").checked;
-      const ntfyTopic = normalizeText(overlay.querySelector("#fbgr-ntfy-topic").value);
-      const discordWebhook = normalizeText(overlay.querySelector("#fbgr-discord-webhook").value);
-      const autoLoadMorePosts = overlay.querySelector("#fbgr-auto-load-more").checked;
-      const minRefreshSec = Math.max(5, Math.floor(Number(overlay.querySelector("#fbgr-refresh-min").value) || STATE.config.minRefreshSec));
-      const maxRefreshSec = Math.max(5, Math.floor(Number(overlay.querySelector("#fbgr-refresh-max").value) || STATE.config.maxRefreshSec));
-      const fixedRefreshSec = Math.max(5, Math.floor(Number(overlay.querySelector("#fbgr-fixed-refresh").value) || STATE.config.fixedRefreshSec));
-      const maxPostsPerScan = clampTargetPostCount(overlay.querySelector("#fbgr-max-posts-per-scan").value);
-
-      STATE.config.jitterEnabled = jitterEnabled;
-      STATE.config.ntfyTopic = ntfyTopic;
-      STATE.config.discordWebhook = discordWebhook;
-      STATE.config.autoLoadMorePosts = autoLoadMorePosts;
-      STATE.config.loadMoreMode = DEFAULT_CONFIG.loadMoreMode;
-      STATE.config.minRefreshSec = minRefreshSec;
-      STATE.config.maxRefreshSec = maxRefreshSec;
-      STATE.config.fixedRefreshSec = fixedRefreshSec;
-      STATE.config.maxPostsPerScan = maxPostsPerScan;
-      saveRefreshSettings();
-      closeSettingsModal();
-      scheduleRefresh();
-      renderPanel();
-    });
+    const settingsRefs = getSettingsModalElementRefs(overlay);
+    bindSettingsModalEventHandlers(overlay, settingsRefs);
   }
 
   // 依 jitter 是否啟用，切換固定刷新 / 範圍刷新欄位顯示。
   function renderSettingsMode() {
     const overlay = document.getElementById("fbgr-settings-modal");
-    if (!overlay) return;
+    const settingsRefs = getSettingsModalElementRefs(overlay);
+    if (!settingsRefs) return;
 
-    const jitterEnabled = overlay.querySelector("#fbgr-jitter-enabled").checked;
-    overlay.querySelector("#fbgr-jitter-wrap").style.display = jitterEnabled ? "grid" : "none";
-    overlay.querySelector("#fbgr-fixed-wrap").style.display = jitterEnabled ? "none" : "grid";
+    const jitterEnabled = settingsRefs.jitterEnabledEl.checked;
+    settingsRefs.jitterWrapEl.style.display = jitterEnabled ? "grid" : "none";
+    settingsRefs.fixedWrapEl.style.display = jitterEnabled ? "none" : "grid";
   }
 
   // 將目前設定灌入設定視窗並顯示。
   function openSettingsModal() {
     createSettingsModal();
     const overlay = document.getElementById("fbgr-settings-modal");
-    if (!overlay) return;
+    const settingsRefs = getSettingsModalElementRefs(overlay);
+    if (!settingsRefs) return;
 
     STATE.config.ntfyTopic = getPersistedNtfyTopic();
     STATE.config.discordWebhook = getPersistedDiscordWebhook();
-    overlay.querySelector("#fbgr-jitter-enabled").checked = STATE.config.jitterEnabled;
-    overlay.querySelector("#fbgr-ntfy-topic").value = STATE.config.ntfyTopic;
-    overlay.querySelector("#fbgr-discord-webhook").value = STATE.config.discordWebhook;
-    overlay.querySelector("#fbgr-auto-load-more").checked = STATE.config.autoLoadMorePosts;
-    overlay.querySelector("#fbgr-refresh-min").value = String(STATE.config.minRefreshSec);
-    overlay.querySelector("#fbgr-refresh-max").value = String(STATE.config.maxRefreshSec);
-    overlay.querySelector("#fbgr-fixed-refresh").value = String(STATE.config.fixedRefreshSec);
-    overlay.querySelector("#fbgr-max-posts-per-scan").value = String(STATE.config.maxPostsPerScan);
+    populateSettingsModalFields(settingsRefs);
     renderSettingsMode();
-    overlay.style.display = "block";
+    setOverlayVisibility(settingsRefs.overlay, true);
   }
 
   // 關閉設定視窗。
   function closeSettingsModal() {
-    const overlay = document.getElementById("fbgr-settings-modal");
-    if (overlay) overlay.style.display = "none";
+    hideOverlayById("fbgr-settings-modal");
   }
 
   // UI: 主控制面板建立與互動事件綁定。
-  // 建立右上角主控制面板，並綁定所有主要互動事件。
-  function createPanel() {
-    if (document.getElementById("fb-group-refresh-panel")) return;
+  // 將主面板目前輸入的 include / exclude 草稿寫回設定與 storage。
+  function savePanelKeywordSettings(panelRefs) {
+    if (!panelRefs) return;
 
-    const panel = document.createElement("div");
-    panel.id = "fb-group-refresh-panel";
-    panel.style.cssText = [
-      "position:fixed",
-      "top:16px",
-      "right:16px",
-      "z-index:2147483643",
-      "width:380px",
-      "max-height:84vh",
-      "overflow:auto",
-      "background:rgba(17,24,39,0.96)",
-      "color:#f9fafb",
-      "border:1px solid #4b5563",
-      "border-radius:12px",
-      "padding:12px",
-      "box-shadow:0 12px 28px rgba(0,0,0,0.35)",
-      "font-size:13px",
-      "line-height:1.45",
-      "font-family:Consolas, 'Courier New', monospace",
-    ].join(";");
+    STATE.config.includeKeywords = normalizeText(panelRefs.includeEl.value);
+    STATE.config.excludeKeywords = normalizeText(panelRefs.excludeEl.value);
+    saveString(STORAGE_KEYS.include, STATE.config.includeKeywords);
+    saveString(STORAGE_KEYS.exclude, STATE.config.excludeKeywords);
+  }
 
-    panel.innerHTML = `
+  // 處理主面板上的「儲存」按鈕。
+  function handlePanelSave(panelRefs) {
+    savePanelKeywordSettings(panelRefs);
+    requestPanelRender();
+    runScan("save");
+  }
+
+  // 處理主面板上的「開始 / 暫停」切換。
+  function handlePanelPauseToggle() {
+    STATE.config.paused = !STATE.config.paused;
+    saveString(STORAGE_KEYS.paused, String(STATE.config.paused));
+
+    if (STATE.config.paused) {
+      clearRefreshTimer();
+      clearScanTimer();
+    } else {
+      clearSeenPostsForGroup(getCurrentGroupId());
+      scheduleScan("manual-start");
+    }
+
+    requestPanelRender();
+  }
+
+  // 處理主面板上的除錯區塊開關。
+  function handlePanelDebugToggle() {
+    STATE.config.debugVisible = !STATE.config.debugVisible;
+    saveString(STORAGE_KEYS.debugVisible, String(STATE.config.debugVisible));
+    requestPanelRender();
+  }
+
+  // 綁定主面板上的互動事件，讓 createPanel() 保持在殼層。
+  function bindPanelEventHandlers(panel) {
+    const panelRefs = getPanelElementRefs(panel);
+    if (!panelRefs) return;
+
+    panelRefs.includeEl.addEventListener("input", persistDraftInputs);
+    panelRefs.excludeEl.addEventListener("input", persistDraftInputs);
+    panel.querySelector("#fbgr-include-help").addEventListener("click", () => openHelpModal("include"));
+    panel.querySelector("#fbgr-history").addEventListener("click", openHistoryModal);
+    panel.querySelector("#fbgr-settings").addEventListener("click", openSettingsModal);
+    panel.querySelector("#fbgr-save").addEventListener("click", () => {
+      handlePanelSave(panelRefs);
+    });
+    panelRefs.pauseEl.addEventListener("click", handlePanelPauseToggle);
+    panel.querySelector("#fbgr-debug-toggle").addEventListener("click", handlePanelDebugToggle);
+  }
+
+  // 主面板建立時順便預熱相關 modal，讓後續互動不需要各自補建。
+  function ensurePanelRelatedModalsCreated() {
+    createSettingsModal();
+    createHistoryModal();
+    createAllHelpModals();
+  }
+
+  // 建立主面板的固定外層 HTML。
+  function renderPanelShellHtml() {
+    return `
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;">
         <div style="font-size:15px;font-weight:bold;">Facebook 社團監看</div>
         <button id="fbgr-debug-toggle" style="padding:4px 8px;cursor:pointer;">除錯</button>
@@ -2915,56 +3660,41 @@
         <div id="fbgr-debug" style="display:none;padding:8px;border:1px solid #374151;border-radius:8px;background:rgba(0,0,0,0.18);color:#c7d2fe;"></div>
       </div>
     `;
+  }
+
+  // 建立右上角主控制面板，並綁定所有主要互動事件。
+  function createPanel() {
+    if (document.getElementById("fb-group-refresh-panel")) return;
+
+    const panel = document.createElement("div");
+    panel.id = "fb-group-refresh-panel";
+    panel.style.cssText = [
+      "position:fixed",
+      "top:16px",
+      "right:16px",
+      "z-index:2147483643",
+      "width:380px",
+      "max-height:84vh",
+      "overflow:auto",
+      "background:rgba(17,24,39,0.96)",
+      "color:#f9fafb",
+      "border:1px solid #4b5563",
+      "border-radius:12px",
+      "padding:12px",
+      "box-shadow:0 12px 28px rgba(0,0,0,0.35)",
+      "font-size:13px",
+      "line-height:1.45",
+      "font-family:Consolas, 'Courier New', monospace",
+    ].join(";");
+
+    panel.innerHTML = renderPanelShellHtml();
 
     document.body.appendChild(panel);
-    createSettingsModal();
-    createHistoryModal();
-    createIncludeHelpModal();
-    createNtfyHelpModal();
-    createDiscordHelpModal();
-
-    panel.querySelector("#fbgr-include").addEventListener("input", persistDraftInputs);
-    panel.querySelector("#fbgr-exclude").addEventListener("input", persistDraftInputs);
-    panel.querySelector("#fbgr-include-help").addEventListener("click", openIncludeHelpModal);
-    panel.querySelector("#fbgr-history").addEventListener("click", openHistoryModal);
-    panel.querySelector("#fbgr-settings").addEventListener("click", openSettingsModal);
-
-    panel.querySelector("#fbgr-save").addEventListener("click", () => {
-      const include = panel.querySelector("#fbgr-include").value;
-      const exclude = panel.querySelector("#fbgr-exclude").value;
-
-      STATE.config.includeKeywords = normalizeText(include);
-      STATE.config.excludeKeywords = normalizeText(exclude);
-      saveString(STORAGE_KEYS.include, STATE.config.includeKeywords);
-      saveString(STORAGE_KEYS.exclude, STATE.config.excludeKeywords);
-
-      renderPanel();
-      runScan("save");
-    });
-
-    panel.querySelector("#fbgr-pause").addEventListener("click", () => {
-      STATE.config.paused = !STATE.config.paused;
-      saveString(STORAGE_KEYS.paused, String(STATE.config.paused));
-
-      if (STATE.config.paused) {
-        clearRefreshTimer();
-        if (STATE.scanTimer) clearTimeout(STATE.scanTimer);
-      } else {
-        clearSeenPostsForGroup(getCurrentGroupId());
-        scheduleScan("manual-start");
-      }
-
-      renderPanel();
-    });
-
-    panel.querySelector("#fbgr-debug-toggle").addEventListener("click", () => {
-      STATE.config.debugVisible = !STATE.config.debugVisible;
-      saveString(STORAGE_KEYS.debugVisible, String(STATE.config.debugVisible));
-      renderPanel();
-    });
+    ensurePanelRelatedModalsCreated();
+    bindPanelEventHandlers(panel);
 
     STATE.panelMounted = true;
-    renderPanel();
+    requestPanelRender();
   }
 
   // 將下一次 refresh 倒數格式化成面板文字。
@@ -3092,6 +3822,387 @@
     `;
   }
 
+  // 批次渲染多列雙欄位欄位，讓 status / history 一類區塊少掉重複 join 邏輯。
+  function renderHistoryFieldRows(rows) {
+    return rows.map((row) => {
+      return renderHistoryFieldRow(row.label, row.value, row.options);
+    }).join("");
+  }
+
+  // 將 debug 摘要列渲染成單行文字，預設會先 escape 值。
+  function renderDebugTextRow(label, value, options = {}) {
+    const { escapeValue = true } = options;
+    const renderedValue = escapeValue ? escapeHtml(value) : String(value || "");
+    return `<div>${escapeHtml(label)}: ${renderedValue}</div>`;
+  }
+
+  // 批次渲染 debug 摘要列。
+  function renderDebugTextRows(rows) {
+    return rows.map((row) => {
+      return renderDebugTextRow(row.label, row.value, {
+        escapeValue: row.escapeValue,
+      });
+    }).join("");
+  }
+
+  // 建立主面板狀態摘要列，讓 view-state 與模板字串之間多一層穩定接口。
+  function buildPanelStatusRows(viewState) {
+    return [
+      { label: "狀態", value: viewState.statusLabel },
+      { label: "社團", value: escapeHtml(viewState.groupName) },
+      {
+        label: "貼文排序",
+        value: `<span style="color:${viewState.feedSortColor};">${escapeHtml(viewState.feedSortDisplay)}</span>`,
+      },
+      { label: "目標貼文", value: viewState.targetPostCountLabel },
+      { label: "刷新模式", value: escapeHtml(viewState.refreshModeLabel) },
+      { label: "下次刷新", value: escapeHtml(viewState.refreshStatusLabel) },
+      { label: "停止原因", value: escapeHtml(viewState.stopReasonLabel) },
+    ];
+  }
+
+  // 建立 debug 摘要列，集中所有欄位順序與 escape 規則。
+  function buildPanelDebugSummaryRows(viewState) {
+    return [
+      { label: "網址", value: viewState.currentUrlLabel },
+      { label: "包含", value: viewState.includeKeywordsLabel },
+      { label: "排除", value: viewState.excludeKeywordsLabel },
+      { label: "掃描原因", value: viewState.reasonLabel },
+      { label: "首次掃描", value: viewState.baselineModeLabel, escapeValue: false },
+      { label: "目標貼文數", value: viewState.targetPostCountLabel, escapeValue: false },
+      { label: "自動載入方式", value: viewState.loadMoreModeLabel },
+      { label: "最上方快篩", value: viewState.topPostShortcutLabel },
+      { label: "自動載入嘗試", value: viewState.loadMoreAttemptedLabel, escapeValue: false },
+      { label: "安全掃描上限", value: `${viewState.maxWindowCountLabel} 輪`, escapeValue: false },
+      { label: "視窗掃描次數", value: viewState.loadMoreWindowCountLabel, escapeValue: false },
+      { label: "停止原因", value: viewState.stopReasonLabel },
+      { label: "本輪最上方貼文 key", value: viewState.topPostKeyLabel },
+      { label: "上一輪最上方貼文 key", value: viewState.previousTopPostKeyLabel },
+      { label: "貼文數變化", value: viewState.loadMoreCountDeltaLabel, escapeValue: false },
+      { label: "累積候選容器次數", value: viewState.candidateCountLabel, escapeValue: false },
+      { label: "實際解析次數", value: viewState.freshExtractCountLabel, escapeValue: false },
+      { label: "快取命中次數", value: viewState.cacheHitCountLabel, escapeValue: false },
+      { label: "累積有效貼文次數", value: viewState.parsedCountLabel, escapeValue: false },
+      { label: "累積唯一貼文數", value: viewState.accumulatedCountLabel, escapeValue: false },
+      { label: "排除控制列數", value: viewState.filteredFeedSortControlCountLabel, escapeValue: false },
+      { label: "排除非貼文數", value: viewState.filteredNonPostCountLabel, escapeValue: false },
+      { label: "排除空白內容數", value: viewState.filteredEmptyTextCountLabel, escapeValue: false },
+      { label: "最終去重後貼文數", value: viewState.scannedCountLabel, escapeValue: false },
+      { label: "最後通知狀態", value: viewState.latestNotificationStatusLabel },
+      { label: "錯誤", value: viewState.latestErrorLabel },
+    ];
+  }
+
+  // 將單筆貼文整理成主面板摘要列需要的 view state。
+  function buildPanelPostListEntryViewState(post, index) {
+    return {
+      indexLabel: `${index + 1}.`,
+      authorLabel: post.author || "(作者未知)",
+      matched: Boolean(post.eligible),
+    };
+  }
+
+  // 將主面板貼文摘要區需要的資料整理成固定結構。
+  function buildPanelPostListViewState(posts) {
+    const entries = posts.map((post, index) => {
+      return buildPanelPostListEntryViewState(post, index);
+    });
+
+    return {
+      count: entries.length,
+      empty: entries.length === 0,
+      entries,
+    };
+  }
+
+  // 將單筆貼文明細整理成 debug 區塊需要的 view state。
+  function buildPanelDebugPostViewState(post, index) {
+    return {
+      indexLabel: `#${index + 1}`,
+      sourceLabel: post.source || "(無)",
+      postIdLabel: post.postId || "(無)",
+      authorLabel: post.author || "(無)",
+      timestampLabel: post.timestampText || "(無)",
+      containerRoleLabel: post.containerRole || "(無)",
+      textSourceLabel: post.textSource || "(無)",
+      hasPostIdLabel: post.postId ? "是" : "否",
+      includeRuleLabel: post.includeRule || "(無)",
+      excludeRuleLabel: post.excludeRule || "(無)",
+      eligibilityLabel: post.eligible ? "是" : "否",
+      seenLabel: post.seen ? "是" : "否",
+      textLabel: truncate(post.text, 180) || "(空白)",
+    };
+  }
+
+  // 將 debug 貼文列表整理成固定的 view state。
+  function buildPanelDebugPostRowsViewState(posts) {
+    const entries = posts.map((post, index) => {
+      return buildPanelDebugPostViewState(post, index);
+    });
+
+    return {
+      empty: entries.length === 0,
+      entries,
+    };
+  }
+
+  // 將 latestScan 轉成 panel/debug 共用的摘要欄位。
+  function buildLatestScanViewState(latestScan) {
+    return {
+      reasonLabel: latestScan?.reason || "(無)",
+      baselineModeLabel: latestScan?.baselineMode ? "是" : "否",
+      targetPostCountLabel: String(latestScan?.targetCount ?? STATE.config.maxPostsPerScan),
+      loadMoreModeLabel: latestScan?.loadMoreMode || STATE.config.loadMoreMode,
+      topPostShortcutLabel: latestScan?.topPostShortcutUsed
+        ? (latestScan?.topPostShortcutMatched ? "命中，已跳過深度掃描" : "已檢查，需完整掃描")
+        : "未啟用",
+      loadMoreAttemptedLabel: latestScan?.loadMoreAttempted
+        ? `${latestScan?.loadMoreAttempts || 0} 次`
+        : "未執行",
+      maxWindowCountLabel: String(latestScan?.maxWindowCount ?? 0),
+      loadMoreWindowCountLabel: String(latestScan?.loadMoreWindowCount ?? 0),
+      stopReasonLabel: latestScan?.stopReason || "(無)",
+      topPostKeyLabel: latestScan?.topPostKey || "(無)",
+      previousTopPostKeyLabel: latestScan?.previousTopPostKey || "(無)",
+      loadMoreCountDeltaLabel: `${latestScan?.loadMoreBeforeCount ?? 0} -> ${latestScan?.loadMoreAfterCount ?? 0}`,
+      candidateCountLabel: String(latestScan?.candidateCount ?? 0),
+      freshExtractCountLabel: String(latestScan?.freshExtractCount ?? 0),
+      cacheHitCountLabel: String(latestScan?.cacheHitCount ?? 0),
+      parsedCountLabel: String(latestScan?.parsedCount ?? 0),
+      accumulatedCountLabel: String(latestScan?.accumulatedCount ?? latestScan?.scannedCount ?? 0),
+      filteredFeedSortControlCountLabel: String(latestScan?.filteredFeedSortControlCount ?? 0),
+      filteredNonPostCountLabel: String(latestScan?.filteredNonPostCount ?? 0),
+      filteredEmptyTextCountLabel: String(latestScan?.filteredEmptyTextCount ?? 0),
+      scannedCountLabel: String(latestScan?.scannedCount ?? 0),
+    };
+  }
+
+  // 建立主面板狀態區需要的 view model。
+  function getPanelStatusViewState({ latestScan, latestPosts, groupName, feedSortLabel }) {
+    const isPreferredFeedSort = feedSortLabel === "新貼文";
+    const latestScanViewState = buildLatestScanViewState(latestScan);
+
+    return {
+      postList: buildPanelPostListViewState(latestPosts),
+      groupName,
+      statusLabel: STATE.config.paused ? "已暫停" : "監控中",
+      feedSortColor: isPreferredFeedSort ? "#f9fafb" : "#fbbf24",
+      feedSortDisplay: isPreferredFeedSort
+        ? feedSortLabel
+        : `${feedSortLabel}（建議調成新貼文）`,
+      targetPostCountLabel: `${STATE.config.maxPostsPerScan} 篇`,
+      refreshModeLabel: formatRefreshModeLabel(),
+      refreshStatusLabel: formatRefreshStatus(),
+      stopReasonLabel: latestScanViewState.stopReasonLabel,
+    };
+  }
+
+  // 建立 debug 區塊需要的 view model，集中所有 fallback 與顯示文字。
+  function getPanelDebugViewState({ latestScan, latestPosts }) {
+    const latestScanViewState = buildLatestScanViewState(latestScan);
+
+    return {
+      postRows: buildPanelDebugPostRowsViewState(latestPosts),
+      currentUrlLabel: location.href,
+      includeKeywordsLabel: STATE.config.includeKeywords || "(空白)",
+      excludeKeywordsLabel: STATE.config.excludeKeywords || "(空白)",
+      ...latestScanViewState,
+      latestNotificationStatusLabel: STATE.latestNotification?.status || "(本次無)",
+      latestErrorLabel: STATE.latestError || "(無)",
+    };
+  }
+
+  // 建立主面板渲染所需的 view state，避免 render 階段直接散讀 STATE 與 DOM。
+  function getPanelViewState() {
+    const latestScan = STATE.latestScan;
+    const latestPosts = STATE.latestPosts;
+    const groupName = getCurrentGroupName() || "無法判斷";
+    const feedSortLabel = getCurrentFeedSortLabel() || "無法判斷";
+
+    return {
+      pauseButtonLabel: STATE.config.paused ? "開始" : "暫停",
+      unsavedKeywordChanges: hasUnsavedKeywordChanges(),
+      debugVisible: STATE.config.debugVisible,
+      status: getPanelStatusViewState({
+        latestScan,
+        latestPosts,
+        groupName,
+        feedSortLabel,
+      }),
+      debug: getPanelDebugViewState({
+        latestScan,
+        latestPosts,
+      }),
+    };
+  }
+
+  // 集中查找主面板內會重複使用的 DOM 節點。
+  function getPanelElementRefs(panel) {
+    if (!panel) return null;
+
+    const refs = {
+      panel,
+      includeEl: panel.querySelector("#fbgr-include"),
+      excludeEl: panel.querySelector("#fbgr-exclude"),
+      pauseEl: panel.querySelector("#fbgr-pause"),
+      statusEl: panel.querySelector("#fbgr-status"),
+      debugEl: panel.querySelector("#fbgr-debug"),
+      unsavedEl: panel.querySelector("#fbgr-unsaved-indicator"),
+    };
+
+    if (
+      !refs.includeEl ||
+      !refs.excludeEl ||
+      !refs.pauseEl ||
+      !refs.statusEl ||
+      !refs.debugEl
+    ) {
+      return null;
+    }
+
+    return refs;
+  }
+
+  // 將 keyword 輸入框同步到目前 state，但保留使用者正在輸入的欄位。
+  function syncPanelKeywordInputs(panelRefs) {
+    if (!panelRefs) return;
+
+    if (panelRefs.includeEl !== document.activeElement) {
+      panelRefs.includeEl.value = STATE.config.includeKeywords;
+    }
+    if (panelRefs.excludeEl !== document.activeElement) {
+      panelRefs.excludeEl.value = STATE.config.excludeKeywords;
+    }
+  }
+
+  // 更新主面板上方的控制按鈕與未儲存提示。
+  function updatePanelControls(panelRefs, viewState) {
+    if (!panelRefs || !viewState) return;
+
+    panelRefs.pauseEl.textContent = viewState.pauseButtonLabel;
+    if (panelRefs.unsavedEl) {
+      panelRefs.unsavedEl.style.display = viewState.unsavedKeywordChanges ? "inline" : "none";
+    }
+  }
+
+  // 更新主面板狀態摘要區塊。
+  function updatePanelStatusSection(panelRefs, viewState) {
+    if (!panelRefs || !viewState) return;
+
+    panelRefs.statusEl.innerHTML = renderPanelStatusHtml(viewState.status);
+  }
+
+  // 更新 debug 區塊的顯示與內容。
+  function updatePanelDebugSection(panelRefs, viewState) {
+    if (!panelRefs || !viewState) return;
+
+    panelRefs.debugEl.style.display = viewState.debugVisible ? "block" : "none";
+    if (!viewState.debugVisible) {
+      return;
+    }
+
+    panelRefs.debugEl.innerHTML = renderPanelDebugHtml(viewState.debug);
+    bindDebugCopyButton(panelRefs.debugEl);
+  }
+
+  // 渲染主面板中的貼文摘要區塊。
+  function renderPanelPostListHtml(viewState) {
+    if (viewState.empty) {
+      return `
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);">
+          <div>尚未獲取貼文</div>
+        </div>
+      `;
+    }
+
+    return `
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);">
+        <div style="margin-bottom:6px;">已獲取 ${viewState.count} 篇貼文：</div>
+        ${viewState.entries.map((entry) => renderPanelPostListEntryHtml(entry)).join("")}
+        <div style="margin-top:8px;font-size:12px;color:#9ca3af;">詳細內容請至「查看紀錄」查看</div>
+      </div>
+    `;
+  }
+
+  // 渲染主面板中的單筆貼文摘要列。
+  function renderPanelPostListEntryHtml(viewState) {
+    const authorLabel = escapeHtml(viewState.authorLabel);
+    const matchedLabel = viewState.matched
+      ? ' <span style="color:#fbbf24;">[符合]</span>'
+      : "";
+    return `<div>${escapeHtml(viewState.indexLabel)} ${authorLabel}${matchedLabel}</div>`;
+  }
+
+  // 渲染主面板狀態區的 HTML。
+  function renderPanelStatusHtml(viewState) {
+    return [
+      renderHistoryFieldRows(buildPanelStatusRows(viewState)),
+      renderPanelPostListHtml(viewState.postList),
+    ].join("");
+  }
+
+  // 渲染 debug 區中的貼文列表。
+  function renderPanelDebugPostRowsHtml(viewState) {
+    if (viewState.empty) {
+      return "<div>目前還沒有抽到貼文。</div>";
+    }
+
+    return viewState.entries.map((entry) => {
+      return renderPanelDebugPostRowHtml(entry);
+    }).join("");
+  }
+
+  // 渲染 debug 區中的單筆貼文明細。
+  function renderPanelDebugPostRowHtml(viewState) {
+    return `
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);">
+        <div>${escapeHtml(viewState.indexLabel)} 來源=${escapeHtml(viewState.sourceLabel)}</div>
+        <div>貼文ID=${escapeHtml(viewState.postIdLabel)}</div>
+        <div>作者=${escapeHtml(viewState.authorLabel)}</div>
+        <div>時間=${escapeHtml(viewState.timestampLabel)}</div>
+        <div>容器=${escapeHtml(viewState.containerRoleLabel)} | 文字來源=${escapeHtml(viewState.textSourceLabel)}</div>
+        <div>有貼文ID=${viewState.hasPostIdLabel}</div>
+        <div>命中包含=${escapeHtml(viewState.includeRuleLabel)}</div>
+        <div>命中排除=${escapeHtml(viewState.excludeRuleLabel)}</div>
+        <div>可通知=${viewState.eligibilityLabel} | 已看過=${viewState.seenLabel}</div>
+        <div>文字=${escapeHtml(viewState.textLabel)}</div>
+      </div>
+    `;
+  }
+
+  // 渲染 debug 區塊的 HTML。
+  function renderPanelDebugHtml(viewState) {
+    const postRows = renderPanelDebugPostRowsHtml(viewState.postRows);
+    const summaryRows = renderDebugTextRows(buildPanelDebugSummaryRows(viewState));
+
+    return `
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+        <button id="fbgr-debug-copy" type="button" style="padding:4px 8px;cursor:pointer;">複製</button>
+      </div>
+      <div id="fbgr-debug-content">
+        ${summaryRows}
+        ${postRows}
+      </div>
+    `;
+  }
+
+  // 綁定 debug 複製按鈕，避免 renderPanel() 本體再處理細節。
+  function bindDebugCopyButton(debugEl) {
+    const copyButton = debugEl.querySelector("#fbgr-debug-copy");
+    const debugContent = debugEl.querySelector("#fbgr-debug-content");
+    if (!copyButton || !debugContent) return;
+
+    copyButton.addEventListener("click", async () => {
+      const copied = await copyTextToClipboard(debugContent.innerText || debugContent.textContent || "");
+      copyButton.textContent = copied ? "已複製" : "複製失敗";
+      window.setTimeout(() => {
+        if (document.body.contains(copyButton)) {
+          copyButton.textContent = "複製";
+        }
+      }, 1200);
+    });
+  }
+
   // UI: 主面板與 debug 區塊渲染。
   // 依 STATE 重新渲染主面板狀態、貼文摘要與 debug 資訊。
   function renderPanel() {
@@ -3100,130 +4211,19 @@
 
     const panel = document.getElementById("fb-group-refresh-panel");
     if (!panel) return;
+    const panelRefs = getPanelElementRefs(panel);
+    if (!panelRefs) return;
 
-    const includeEl = panel.querySelector("#fbgr-include");
-    const excludeEl = panel.querySelector("#fbgr-exclude");
-    const pauseEl = panel.querySelector("#fbgr-pause");
-    const statusEl = panel.querySelector("#fbgr-status");
-    const debugEl = panel.querySelector("#fbgr-debug");
-    const unsavedEl = panel.querySelector("#fbgr-unsaved-indicator");
-
-    if (includeEl !== document.activeElement) includeEl.value = STATE.config.includeKeywords;
-    if (excludeEl !== document.activeElement) excludeEl.value = STATE.config.excludeKeywords;
-    pauseEl.textContent = STATE.config.paused ? "開始" : "暫停";
-    if (unsavedEl) unsavedEl.style.display = hasUnsavedKeywordChanges() ? "inline" : "none";
-
-    const latestScan = STATE.latestScan;
-    const groupName = getCurrentGroupName() || "無法判斷";
-    const feedSortLabel = getCurrentFeedSortLabel() || "無法判斷";
-    const isPreferredFeedSort = feedSortLabel === "新貼文";
-    const feedSortColor = isPreferredFeedSort ? "#f9fafb" : "#fbbf24";
-    const feedSortDisplay = isPreferredFeedSort
-      ? feedSortLabel
-      : `${feedSortLabel}（建議調成新貼文）`;
-    const postListHtml = STATE.latestPosts.length
-      ? `
-          <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);">
-            <div style="margin-bottom:6px;">已獲取 ${STATE.latestPosts.length} 篇貼文：</div>
-            ${STATE.latestPosts.map((post, index) => {
-              const authorLabel = escapeHtml(post.author || "(作者未知)");
-              const matchedLabel = post.eligible
-                ? ' <span style="color:#fbbf24;">[符合]</span>'
-                : "";
-              return `<div>${index + 1}. ${authorLabel}${matchedLabel}</div>`;
-            }).join("")}
-            <div style="margin-top:8px;font-size:12px;color:#9ca3af;">詳細內容請至「查看紀錄」查看</div>
-          </div>
-        `
-      : `
-          <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.08);">
-            <div>尚未獲取貼文</div>
-          </div>
-        `;
-
-    statusEl.innerHTML = [
-      renderHistoryFieldRow("狀態", STATE.config.paused ? "已暫停" : "監控中"),
-      renderHistoryFieldRow("社團", escapeHtml(groupName)),
-      renderHistoryFieldRow("貼文排序", `<span style="color:${feedSortColor};">${escapeHtml(feedSortDisplay)}</span>`),
-      renderHistoryFieldRow("目標貼文", `${STATE.config.maxPostsPerScan} 篇`),
-      renderHistoryFieldRow("刷新模式", escapeHtml(formatRefreshModeLabel())),
-      renderHistoryFieldRow("下次刷新", escapeHtml(formatRefreshStatus())),
-      renderHistoryFieldRow("停止原因", escapeHtml(latestScan?.stopReason || "(無)")),
-      postListHtml,
-    ].join("");
-
-    debugEl.style.display = STATE.config.debugVisible ? "block" : "none";
-
-    if (STATE.config.debugVisible) {
-      const postRows = STATE.latestPosts.length
-        ? STATE.latestPosts.map((post, index) => {
-            return `
-              <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);">
-                <div>#${index + 1} 來源=${escapeHtml(post.source)}</div>
-                <div>貼文ID=${escapeHtml(post.postId || "(無)")}</div>
-                <div>作者=${escapeHtml(post.author || "(無)")}</div>
-                <div>時間=${escapeHtml(post.timestampText || "(無)")}</div>
-                <div>容器=${escapeHtml(post.containerRole || "(無)")} | 文字來源=${escapeHtml(post.textSource || "(無)")}</div>
-                <div>有貼文ID=${post.postId ? "是" : "否"}</div>
-                <div>命中包含=${escapeHtml(post.includeRule || "(無)")}</div>
-                <div>命中排除=${escapeHtml(post.excludeRule || "(無)")}</div>
-                <div>可通知=${post.eligible ? "是" : "否"} | 已看過=${post.seen ? "是" : "否"}</div>
-                <div>文字=${escapeHtml(truncate(post.text, 180) || "(空白)")}</div>
-              </div>
-            `;
-          }).join("")
-        : "<div>目前還沒有抽到貼文。</div>";
-
-      debugEl.innerHTML = `
-        <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-          <button id="fbgr-debug-copy" type="button" style="padding:4px 8px;cursor:pointer;">複製</button>
-        </div>
-        <div id="fbgr-debug-content">
-          <div>網址: ${escapeHtml(location.href)}</div>
-          <div>包含: ${escapeHtml(STATE.config.includeKeywords || "(空白)")}</div>
-          <div>排除: ${escapeHtml(STATE.config.excludeKeywords || "(空白)")}</div>
-          <div>掃描原因: ${escapeHtml(latestScan?.reason || "(無)")}</div>
-          <div>首次掃描: ${latestScan?.baselineMode ? "是" : "否"}</div>
-          <div>目標貼文數: ${latestScan?.targetCount ?? STATE.config.maxPostsPerScan}</div>
-          <div>自動載入方式: ${escapeHtml(latestScan?.loadMoreMode || STATE.config.loadMoreMode)}</div>
-          <div>最上方快篩: ${latestScan?.topPostShortcutUsed ? (latestScan?.topPostShortcutMatched ? "命中，已跳過深度掃描" : "已檢查，需完整掃描") : "未啟用"}</div>
-          <div>自動載入嘗試: ${latestScan?.loadMoreAttempted ? `${latestScan?.loadMoreAttempts || 0} 次` : "未執行"}</div>
-          <div>安全掃描上限: ${latestScan?.maxWindowCount ?? 0} 輪</div>
-          <div>視窗掃描次數: ${latestScan?.loadMoreWindowCount ?? 0}</div>
-          <div>停止原因: ${escapeHtml(latestScan?.stopReason || "(無)")}</div>
-          <div>本輪最上方貼文 key: ${escapeHtml(latestScan?.topPostKey || "(無)")}</div>
-          <div>上一輪最上方貼文 key: ${escapeHtml(latestScan?.previousTopPostKey || "(無)")}</div>
-          <div>貼文數變化: ${(latestScan?.loadMoreBeforeCount ?? 0)} -> ${(latestScan?.loadMoreAfterCount ?? 0)}</div>
-          <div>累積候選容器次數: ${latestScan?.candidateCount ?? 0}</div>
-          <div>實際解析次數: ${latestScan?.freshExtractCount ?? 0}</div>
-          <div>快取命中次數: ${latestScan?.cacheHitCount ?? 0}</div>
-          <div>累積有效貼文次數: ${latestScan?.parsedCount ?? 0}</div>
-          <div>累積唯一貼文數: ${latestScan?.accumulatedCount ?? latestScan?.scannedCount ?? 0}</div>
-          <div>排除控制列數: ${latestScan?.filteredFeedSortControlCount ?? 0}</div>
-          <div>排除非貼文數: ${latestScan?.filteredNonPostCount ?? 0}</div>
-          <div>排除空白內容數: ${latestScan?.filteredEmptyTextCount ?? 0}</div>
-          <div>最終去重後貼文數: ${latestScan?.scannedCount ?? 0}</div>
-          <div>最後通知狀態: ${escapeHtml(STATE.latestNotification?.status || "(本次無)")}</div>
-          <div>錯誤: ${escapeHtml(STATE.latestError || "(無)")}</div>
-          ${postRows}
-        </div>
-      `;
-
-      const copyButton = debugEl.querySelector("#fbgr-debug-copy");
-      const debugContent = debugEl.querySelector("#fbgr-debug-content");
-      if (copyButton && debugContent) {
-        copyButton.addEventListener("click", async () => {
-          const copied = await copyTextToClipboard(debugContent.innerText || debugContent.textContent || "");
-          copyButton.textContent = copied ? "已複製" : "複製失敗";
-          window.setTimeout(() => {
-            if (document.body.contains(copyButton)) {
-              copyButton.textContent = "複製";
-            }
-          }, 1200);
-        });
-      }
-    }
+    syncPanelKeywordInputs(panelRefs);
+    const viewState = getPanelViewState();
+    updatePanelControls(panelRefs, viewState);
+    updatePanelStatusSection(panelRefs, viewState);
+    updatePanelDebugSection(panelRefs, viewState);
   }
+
+  // ==========================================================================
+  // Lifecycle / Observer
+  // ==========================================================================
 
   // 監聽 Facebook 動態 DOM / route 變化並維持腳本生命週期。
   // 重新安裝 MutationObserver，當動態牆新增節點時觸發下一輪掃描。
@@ -3262,36 +4262,91 @@
     return STATE.config.loadMoreMode === "wheel" ? "模擬滑鼠滾輪" : "溫和捲動";
   }
 
+  // route 切換時重置與本輪掃描結果相關的執行期狀態。
+  function resetRouteScanState() {
+    STATE.latestPosts = [];
+    STATE.latestScan = null;
+    STATE.latestError = "";
+  }
+
+  // 封裝 route 變更後的共同行為，集中處理 refresh / observer / scan / render。
+  function handleRouteTransition() {
+    resetRouteScanState();
+    clearRefreshTimer();
+    reinstallObserverAndScheduleScan("route-change");
+    requestPanelRender();
+  }
+
+  // 主面板若被 Facebook SPA 重新掛載吃掉，補回 panel 並重繪。
+  function ensurePanelMountedAndRender() {
+    if (!document.getElementById("fb-group-refresh-panel")) {
+      STATE.panelMounted = false;
+      createPanel();
+      return;
+    }
+
+    requestPanelRender();
+  }
+
+  // 將目前 URL 與群組資訊同步到 route state，供後續判斷 settle / route-change 使用。
+  function syncCurrentRouteState() {
+    STATE.lastUrl = location.href;
+    STATE.lastRouteChangeAt = Date.now();
+    STATE.lastRouteGroupId = getCurrentGroupId();
+  }
+
+  // 啟動腳本後的初始 panel / observer / refresh 流程。
+  function bootstrapAppRuntime() {
+    createPanel();
+    reinstallObserverAndScheduleScan("startup");
+    scheduleRefresh();
+  }
+
+  // 啟動週期性維護計時器，持續監看 route 與 panel 是否被重掛。
+  function startMaintenanceLoops() {
+    STATE.routeTimer = window.setInterval(handleRouteChange, 1000);
+    STATE.renderTimer = window.setInterval(ensurePanelMountedAndRender, 1000);
+  }
+
   // 監聽 Facebook SPA 路由變化，切頁時重設狀態並重新安排掃描。
   function handleRouteChange() {
     if (STATE.lastUrl === location.href) return;
 
-    STATE.lastUrl = location.href;
-    STATE.lastRouteChangeAt = Date.now();
-    STATE.lastRouteGroupId = getCurrentGroupId();
-    STATE.latestPosts = [];
-    STATE.latestScan = null;
-    STATE.latestError = "";
-    clearRefreshTimer();
-    installObserver();
-    scheduleScan("route-change");
-    renderPanel();
+    syncCurrentRouteState();
+    handleRouteTransition();
   }
 
   // 腳本主入口：建立 UI、安裝 observer、安排掃描與刷新、啟動週期性維護。
   function start() {
-    createPanel();
-    installObserver();
-    scheduleScan("startup");
-    scheduleRefresh();
-    STATE.routeTimer = window.setInterval(handleRouteChange, 1000);
-    STATE.renderTimer = window.setInterval(() => {
-      if (!document.getElementById("fb-group-refresh-panel")) {
-        STATE.panelMounted = false;
-        createPanel();
-      }
-      renderPanel();
-    }, 1000);
+    bootstrapAppRuntime();
+    startMaintenanceLoops();
+  }
+
+  // 測試模式只暴露穩定純邏輯，不啟動實際 userscript 生命週期。
+  function exposeTestHooks() {
+    globalThis.__FB_GROUP_REFRESH_TEST_HOOKS__ = {
+      normalizeText,
+      normalizeForMatch,
+      parseKeywordInput,
+      matchRules,
+      buildPostKeyFragments,
+      buildCompositePostKey,
+      getPostKey,
+      collectUniquePostsByKey,
+      dedupeExtractedPosts,
+      trimSeenPostGroupStore,
+      mergeMatchHistoryEntries,
+      getNotificationFields,
+      buildCompactNotificationSegments,
+      buildCompactNotificationBody,
+      buildRemoteNotificationLines,
+      buildRemoteNotificationBody,
+    };
+  }
+
+  if (globalThis.__FB_GROUP_REFRESH_TEST_MODE__) {
+    exposeTestHooks();
+    return;
   }
 
   if (document.readyState === "loading") {

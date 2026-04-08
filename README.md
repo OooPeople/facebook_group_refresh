@@ -273,7 +273,7 @@ https://www.facebook.com/groups/<group-id>/
 若本機已安裝 Node.js，可執行：
 
 ```powershell
-& 'C:\Program Files\nodejs\node.exe' '.\scripts\smoke_check_userscript.js'
+node .\scripts\smoke_check_userscript.js
 ```
 
 目前 smoke test 已涵蓋 userscript metadata、keyword matcher / dedupe / notification formatting、`開始 / 暫停` 的 restart 語義、top-post shortcut eligibility、refresh payload builder，以及 scan / notification runtime 的純邏輯 helper。

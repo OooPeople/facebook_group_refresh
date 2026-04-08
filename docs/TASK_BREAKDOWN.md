@@ -6,7 +6,7 @@ This checklist began as the implementation plan. Most core items below are now c
 
 - done: create the initial Tampermonkey metadata block
 - done: create a single config object with defaults
-- done: add local storage helpers
+- done: add storage helpers with Tampermonkey-first persistence and legacy localStorage migration
 - done: add a fixed control panel shell
 - done: add a collapsible debug panel shell
 
@@ -16,12 +16,13 @@ This checklist began as the implementation plan. Most core items below are now c
 - done: implement exclude keyword input
 - done: implement save action
 - done: implement pause and resume action
-- done: implement scan-now action
 - done: implement test-notification action
 - done: implement debug visibility toggle
 - done: implement include-keyword help modal
 - done: implement settings modal
 - done: implement match-history modal
+- done: implement clear-history action for the global match-history list
+- done: surface unsaved keyword changes in the main panel
 
 ## Phase 3: Page and post detection
 
@@ -31,6 +32,7 @@ This checklist began as the implementation plan. Most core items below are now c
 - done: normalize each post into the V1 data model
 - done: record extraction source for debugging
 - done: accumulate posts across multiple visible scroll windows
+- done: expand collapsed post text before extracting content
 
 ## Phase 4: Matching and dedupe
 
@@ -40,7 +42,8 @@ This checklist began as the implementation plan. Most core items below are now c
 - done: implement dedupe store with bounded history
 - done: namespace seen posts by group identifier
 - done: add compatibility with legacy dedupe keys
-- pending: further improve stable `postId` and timestamp extraction where Facebook variants differ
+- pending: further improve stable `postId` extraction where Facebook variants differ
+- pending: re-enable reliable timestamp extraction without confusing post time and comment time
 
 ## Phase 5: Notifications
 
@@ -48,6 +51,7 @@ This checklist began as the implementation plan. Most core items below are now c
 - done: add notification preview text
 - done: store last notification result for debug output
 - done: implement optional `ntfy` topic support
+- done: ensure test notifications do not pollute post dedupe state
 - pending: optionally expose browser-native notification as a user-facing setting if needed later
 
 ## Phase 6: Scan loop
@@ -57,6 +61,7 @@ This checklist began as the implementation plan. Most core items below are now c
 - done: add conservative randomized refresh fallback
 - done: ensure pause mode stops both scan and refresh scheduling
 - done: add conservative auto-load-more scanning across multiple windows
+- done: add configurable maximum unique posts per scan
 
 ## Phase 7: Debugging support
 
@@ -65,6 +70,7 @@ This checklist began as the implementation plan. Most core items below are now c
 - done: surface latest extraction results
 - done: surface latest match and dedupe decisions
 - done: surface latest error and notification result
+- done: surface auto-load-more window and count diagnostics
 
 ## Phase 8: Manual verification
 
@@ -76,3 +82,4 @@ This checklist began as the implementation plan. Most core items below are now c
 - done: test `ntfy` setting and test-notification flow
 - pending: regression-check no-keyword mode
 - pending: regression-check exclude-rule suppression after recent notification changes
+- pending: regression-check history clearing and max-posts-per-scan settings on live Facebook DOM variants

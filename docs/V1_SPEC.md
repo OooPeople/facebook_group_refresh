@@ -18,7 +18,7 @@ Build a Tampermonkey userscript for Facebook group pages that:
 - One userscript running in the active browser
 - Keyword-based detection for new posts
 - Local state only
-- Read-only behavior except for page refresh and local browser storage
+- Conservative page interaction only: refresh, gentle scrolling for more posts, expanding collapsed post text, and local browser storage
 
 ## Out of scope
 
@@ -39,7 +39,6 @@ The panel should be fixed on the page and remain visible without blocking core c
 - `Exclude keywords` input
 - `Save` button
 - `Pause monitoring` button
-- `Scan now` button
 - `History` button
 - `Settings` button
 - `Debug panel toggle`
@@ -76,7 +75,7 @@ Examples:
 
 ## Configuration model
 
-V1 should keep configuration in local browser storage with clear keys.
+V1 should keep configuration in userscript-managed local storage with clear keys. In the current implementation this is Tampermonkey storage first, with legacy browser storage migration support.
 
 Suggested settings:
 - include keywords
@@ -86,6 +85,9 @@ Suggested settings:
 - debug panel visible flag
 - refresh min seconds
 - refresh max seconds
+- fixed refresh seconds
+- refresh jitter enabled flag
+- auto-load-more enabled flag
 - maximum posts to inspect per scan
 - notification settings for local browser and optional remote channel
 
@@ -145,8 +147,9 @@ Priority:
 The extractor should inspect only the most recent N posts per pass.
 
 Current implementation target:
-- accumulate up to 5 unique posts across multiple visible feed windows
+- accumulate up to a user-configurable number of unique posts across multiple visible feed windows
 - keep seen-post history bounded to 5 per group
+- keep match-history records bounded to 10 globally, with group name shown per entry
 
 ## Matching flow
 
@@ -171,6 +174,10 @@ The seen-post store should:
 - be namespaced by group
 - include notification timestamp
 
+Current implementation note:
+- seen-post dedupe remains namespaced by group
+- match-history is now rendered as one global list rather than per-group buckets
+
 ## Notification behavior
 
 V1 notification channels:
@@ -189,6 +196,11 @@ Suggested notification content:
 - matched keyword or rule
 - short text preview
 - post link
+
+Current implementation notes:
+- local userscript notification is enabled by default
+- browser-native notification exists in code but is not currently exposed as a user-facing setting
+- `ntfy` is optional and only sends when a topic is configured
 
 ## Debug panel
 
@@ -235,7 +247,9 @@ Suggested keys:
 - `fb_group_refresh_ntfy_topic`
 - `fb_group_refresh_paused`
 - `fb_group_refresh_debug_visible`
+- `fb_group_refresh_auto_load_more_posts`
 - `fb_group_refresh_seen_posts`
+- `fb_group_refresh_match_history`
 - `fb_group_refresh_last_notification`
 - `fb_group_refresh_refresh_range`
 
@@ -246,7 +260,7 @@ Before calling V1 usable, verify:
 1. panel renders on a supported group page
 2. saving keywords persists across reload
 3. pause button blocks refresh and scans
-4. scan-now works without reload
+4. resuming from paused state triggers a clean scan without reload
 5. test notification works independently
 6. debug toggle hides and shows the panel
 7. new matching post notifies once
@@ -260,3 +274,4 @@ Before calling V1 usable, verify:
 - permalink extraction may differ between group post variants
 - localized UI may affect text-based selectors
 - infinite-scroll feed updates may generate noisy mutations
+- timestamp extraction is currently disabled in the implementation because Facebook DOM heuristics still confuse post time with comment time

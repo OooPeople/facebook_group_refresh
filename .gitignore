@@ -1,0 +1,48 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and temp files
+*.log
+tmp/
+temp/
+cache/
+
+# Local secrets and machine-specific config
+.env
+.env.*
+!.env.example
+*.local
+*.local.*
+secrets/
+
+# Browser automation artifacts
+playwright-report/
+test-results/
+artifacts/
+downloads/
+screenshots/
+videos/
+
+# Node.js
+node_modules/
+dist/
+coverage/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Misc build outputs
+*.tmp
+*.bak

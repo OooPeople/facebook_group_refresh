@@ -384,6 +384,32 @@
     });
   }
 
+  // 讀取 sessionRuntime 中已初始化的群組集合；型別不符時退回空 Set。
+  function getInitializedGroupSet() {
+    return STATE.sessionRuntime.initializedGroups instanceof Set
+      ? STATE.sessionRuntime.initializedGroups
+      : new Set();
+  }
+
+  // 檢查指定群組是否已完成 baseline 初始化。
+  function isGroupInitialized(groupId) {
+    const normalizedGroupId = String(groupId || "");
+    return Boolean(normalizedGroupId) && getInitializedGroupSet().has(normalizedGroupId);
+  }
+
+  // 將指定群組標記為已初始化，並以新的 Set 寫回 session runtime。
+  function markGroupInitialized(groupId) {
+    const normalizedGroupId = String(groupId || "");
+    if (!normalizedGroupId || isGroupInitialized(normalizedGroupId)) {
+      return false;
+    }
+
+    const nextGroups = new Set(getInitializedGroupSet());
+    nextGroups.add(normalizedGroupId);
+    setSessionRuntimePatch({ initializedGroups: nextGroups });
+    return true;
+  }
+
   // 判斷 patch 是否真的帶有指定欄位，避免把 undefined 視為有意更新。
   function hasOwnPatchValue(patch, key) {
     return Boolean(patch) && Object.prototype.hasOwnProperty.call(patch, key);
@@ -493,26 +519,6 @@
       ...loadPersistedConfigGroup("ui"),
       ...loadRefreshConfigOverrides(),
     };
-  }
-
-  // 讀取並正規化已保存的 ntfy topic。
-  function getPersistedNtfyTopic() {
-    return loadPersistedConfigField("ntfyTopic", DEFAULT_CONFIG.ntfyTopic);
-  }
-
-  // 保存 ntfy topic；空字串時直接移除設定。
-  function persistNtfyTopicValue(value) {
-    return persistConfigFieldValue("ntfyTopic", value);
-  }
-
-  // 讀取並正規化已保存的 Discord Webhook URL。
-  function getPersistedDiscordWebhook() {
-    return loadPersistedConfigField("discordWebhook", DEFAULT_CONFIG.discordWebhook);
-  }
-
-  // 保存 Discord Webhook URL；空字串時直接移除設定。
-  function persistDiscordWebhookValue(value) {
-    return persistConfigFieldValue("discordWebhook", value);
   }
 
   // 以字串形式讀取儲存值，讀不到時回傳預設值。
@@ -740,6 +746,11 @@
   // 這些 helper 只處理正式對外設定；internal-only 行為不再混進 STATE.config。
   function getLoadMoreMode() {
     return INTERNAL_CONFIG.loadMoreMode;
+  }
+
+  // 從持久化 storage 重新 hydration 通知端點設定，供 notifier 與 settings modal 共用。
+  function hydrateNotificationConfigFromStorage() {
+    return applyNotificationConfigPatch(loadPersistedConfigGroup("notification"));
   }
 
   // 將 include / exclude 關鍵字草稿整理成標準 config patch。
@@ -3165,7 +3176,7 @@
       includeRules: parseKeywordInput(STATE.config.includeKeywords),
       excludeRules: parseKeywordInput(STATE.config.excludeKeywords),
       // 每個群組第一次掃描只建立 baseline，不對既有貼文發通知。
-      baselineMode: !STATE.sessionRuntime.initializedGroups.has(groupId),
+      baselineMode: !isGroupInitialized(groupId),
     };
   }
 
@@ -3194,7 +3205,7 @@
   // baseline 群組只需要在成功完成本輪掃描後註記一次。
   function markGroupInitializedAfterScan(groupId, baselineMode) {
     if (baselineMode) {
-      STATE.sessionRuntime.initializedGroups.add(groupId);
+      markGroupInitialized(groupId);
     }
   }
 
@@ -3301,8 +3312,7 @@
 
   // 透過 ntfy topic 傳送遠端通知；未設定 topic 時直接跳過。
   function sendNtfyNotification({ title, body, clickUrl }) {
-    const topic = getPersistedNtfyTopic();
-    applyNotificationConfigPatch({ ntfyTopic: topic });
+    const { ntfyTopic: topic } = hydrateNotificationConfigFromStorage();
     if (!topic) {
       return Promise.resolve("ntfy_skipped");
     }
@@ -3338,8 +3348,7 @@
 
   // 透過 Discord Webhook 傳送遠端通知；未設定 URL 時直接跳過。
   function sendDiscordWebhookNotification({ title, body, clickUrl }) {
-    const webhook = getPersistedDiscordWebhook();
-    applyNotificationConfigPatch({ discordWebhook: webhook });
+    const { discordWebhook: webhook } = hydrateNotificationConfigFromStorage();
     if (!webhook) {
       return Promise.resolve("discord_skipped");
     }
@@ -3974,10 +3983,7 @@
     const settingsRefs = getSettingsModalElementRefs(overlay);
     if (!settingsRefs) return;
 
-    applyNotificationConfigPatch({
-      ntfyTopic: getPersistedNtfyTopic(),
-      discordWebhook: getPersistedDiscordWebhook(),
-    });
+    hydrateNotificationConfigFromStorage();
     populateSettingsModalFields(settingsRefs);
     renderSettingsMode();
     setOverlayVisibility(settingsRefs.overlay, true);
@@ -4996,6 +5002,8 @@
       getMonitoringControlAction,
       getPauseToggleAction,
       getMonitoringControlLabel,
+      isGroupInitialized,
+      markGroupInitialized,
       buildKeywordConfigPatch,
       buildRefreshConfigPatch,
       buildRefreshSettingsPayloadFromConfig,
@@ -5003,6 +5011,7 @@
       buildMonitoringConfigPatch,
       buildUiConfigPatch,
       getLoadMoreMode,
+      hydrateNotificationConfigFromStorage,
       normalizePanelPosition,
       getPanelPositionBounds,
       clampPanelPosition,

@@ -11,6 +11,7 @@
 - 支援 `;` 作為 OR、空格作為 AND 的規則寫法
 - 支援關鍵字規則說明彈窗
 - 支援開始 / 暫停監控
+- 支援拖曳主面板，並記住上次位置
 - 支援查看符合關鍵字通知紀錄，並可清空全部通知紀錄
 - 支援浮動刷新與固定刷新秒數設定
 - 支援自動載入更多貼文
@@ -106,6 +107,8 @@ https://www.facebook.com/groups/<group-id>/
   儲存包含與排除關鍵字。在監控中按下後會依新規則重新掃描。
 - `開始 / 暫停`
   切換監控狀態。從暫停切回開始時，按鈕語義屬於「重新開始目前社團監控」，會清除目前社團的已看過貼文記錄並立即重新掃描，而不是單純沿用舊基準恢復排程。
+- `主面板拖曳`
+  可拖曳右上角主面板標題列，並在重新整理後保留上次位置。
 - `查看紀錄`
   查看最近符合關鍵字且已通知的全域紀錄，也可以清空全部通知紀錄。
 - `設定`
@@ -276,7 +279,7 @@ https://www.facebook.com/groups/<group-id>/
 node .\scripts\smoke_check_userscript.js
 ```
 
-目前 smoke test 已涵蓋 userscript metadata、keyword matcher / dedupe / notification formatting、`開始 / 暫停` 的 restart 語義、top-post shortcut eligibility、refresh payload builder，以及 scan / notification runtime 的純邏輯 helper。
+目前 smoke test 已涵蓋 userscript metadata、keyword matcher / dedupe / notification formatting、`開始 / 暫停` 的 restart 語義、top-post shortcut eligibility、refresh payload builder、panel drag position helper，以及 scan / notification runtime 的純邏輯 helper。
 
 這個檢查主要會驗證：
 

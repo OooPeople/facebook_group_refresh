@@ -280,7 +280,6 @@
   - `createPendingNotificationState()`
   - `buildNotificationPayload()`
   - `sendGmDesktopNotification()`
-  - `sendBrowserDesktopNotification()`
   - `appendNotificationStatus()`
   - `finalizeLatestNotification()`
   - `buildNotificationChannelRunnerMap()`
@@ -291,6 +290,9 @@
   - permalink extraction: `disabled`
   - timestamp extraction: `removed`
   - browser-native notification: `removed`
+
+- 通知端點的 storage hydration 已收斂為共用入口，settings modal 與 notifier 目前不再各自散讀 storage。
+- 主面板目前已支援拖曳、位置持久化與 viewport 邊界夾制，對應的 UI interaction state 已落入 `uiRuntime`。
 
 目前效果：
 

@@ -148,6 +148,27 @@ function runTests(hooks) {
     "Expected active action label to remain pause."
   );
   assert(
+    hooks.isGroupInitialized("test-group") === false,
+    "Expected groups to start in the uninitialized session state."
+  );
+  assert(
+    hooks.markGroupInitialized("test-group") === true,
+    "Expected markGroupInitialized to add a new group once."
+  );
+  assert(
+    hooks.isGroupInitialized("test-group") === true,
+    "Expected markGroupInitialized to update the session initialization state."
+  );
+  assert(
+    hooks.markGroupInitialized("test-group") === false,
+    "Expected markGroupInitialized to ignore duplicate groups."
+  );
+  assert(
+    JSON.stringify(hooks.hydrateNotificationConfigFromStorage()) ===
+      JSON.stringify({ ntfyTopic: "", discordWebhook: "" }),
+    "Expected notification hydration to reuse persisted defaults when storage is empty."
+  );
+  assert(
     JSON.stringify(hooks.normalizePanelPosition({ top: 18.4, left: 205.6 })) ===
       JSON.stringify({ top: 18, left: 206 }),
     "Expected panel position normalization to round stored coordinates."

@@ -48,11 +48,12 @@ This checklist began as the implementation plan. Most core items below are now c
 ## Phase 5: Notifications
 
 - done: implement userscript notification
+- done: implement optional Discord Webhook support
 - done: add notification preview text
 - done: store last notification result for debug output
 - done: implement optional `ntfy` topic support
 - done: ensure test notifications do not pollute post dedupe state
-- pending: optionally expose browser-native notification as a user-facing setting if needed later
+- pending: optionally expose browser-native desktop notification as a user-facing setting if needed later
 
 ## Phase 6: Scan loop
 
@@ -62,6 +63,7 @@ This checklist began as the implementation plan. Most core items below are now c
 - done: ensure pause mode stops both scan and refresh scheduling
 - done: add conservative auto-load-more scanning across multiple windows
 - done: add configurable maximum unique posts per scan
+- done: add top-post shortcut to skip deep scans when the latest post has not changed
 
 ## Phase 7: Debugging support
 

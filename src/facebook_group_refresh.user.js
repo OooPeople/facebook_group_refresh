@@ -3,7 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @version      2026-04-04
 // @description  Monitor Facebook group posts for keyword matches and notify on new posts.
-// @author       Codex
+// @author       OooPeople
+// @homepageURL  https://github.com/OooPeople/facebook_group_refresh
 // @match        https://www.facebook.com/groups/*
 // @grant        GM_notification
 // @grant        GM_getValue
@@ -11,6 +12,7 @@
 // @grant        GM_deleteValue
 // @grant        GM_xmlhttpRequest
 // @connect      ntfy.sh
+// @connect      discord.com
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -28,6 +30,9 @@
     paused: "fb_group_refresh_paused",
     debugVisible: "fb_group_refresh_debug_visible",
     ntfyTopic: "fb_group_refresh_ntfy_topic",
+    discordWebhook: "fb_group_refresh_discord_webhook",
+    latestTopPosts: "fb_group_refresh_latest_top_posts",
+    latestScanPosts: "fb_group_refresh_latest_scan_posts",
     autoLoadMorePosts: "fb_group_refresh_auto_load_more_posts",
     seenPosts: "fb_group_refresh_seen_posts",
     matchHistory: "fb_group_refresh_match_history",
@@ -41,6 +46,7 @@
     paused: true,
     debugVisible: false,
     ntfyTopic: "",
+    discordWebhook: "",
     maxPostsPerScan: 5,
     scanDebounceMs: 1500,
     minRefreshSec: 25,
@@ -49,20 +55,18 @@
     fixedRefreshSec: 60,
     autoLoadMorePosts: true,
     loadMoreMode: "scroll",
-    seenPostLimitPerGroup: 5,
-    matchHistoryLimitPerGroup: 10,
+    matchHistoryGlobalLimit: 10,
     enableGmNotification: true,
     enableBrowserNotification: false,
   };
 
   const SCAN_LIMITS = {
     minTargetPosts: 1,
-    maxTargetPosts: 8,
+    maxTargetPosts: 10,
     minCandidateTextLength: 8,
     candidateMultiplier: 6,
-    baseMaxWindows: 8,
-    extendedMaxWindows: 12,
-    maxStagnantWindows: 3,
+    seenPostMultiplier: 2,
+    maxWindowMultiplier: 2,
   };
 
   const FEED_SORT_LABELS = ["新貼文", "最相關", "最新動態"];
@@ -85,6 +89,7 @@
     lastRouteChangeAt: 0,
     lastRouteGroupId: getCurrentGroupId(),
     panelMounted: false,
+    isScanning: false,
     isLoadingMorePosts: false,
   };
 
@@ -97,6 +102,7 @@
       includeKeywords: loadString(STORAGE_KEYS.include, DEFAULT_CONFIG.includeKeywords),
       excludeKeywords: loadString(STORAGE_KEYS.exclude, DEFAULT_CONFIG.excludeKeywords),
       ntfyTopic: loadString(STORAGE_KEYS.ntfyTopic, DEFAULT_CONFIG.ntfyTopic),
+      discordWebhook: loadString(STORAGE_KEYS.discordWebhook, DEFAULT_CONFIG.discordWebhook),
       paused: loadBoolean(STORAGE_KEYS.paused, DEFAULT_CONFIG.paused),
       debugVisible: loadBoolean(STORAGE_KEYS.debugVisible, DEFAULT_CONFIG.debugVisible),
       minRefreshSec: refreshRange?.min ?? DEFAULT_CONFIG.minRefreshSec,
@@ -119,6 +125,7 @@
       autoLoadMorePosts: STATE.config.autoLoadMorePosts,
     });
     saveNtfyTopicSetting(STATE.config.ntfyTopic);
+    saveDiscordWebhookSetting(STATE.config.discordWebhook);
     saveString(STORAGE_KEYS.autoLoadMorePosts, String(STATE.config.autoLoadMorePosts));
   }
 
@@ -303,13 +310,14 @@
     return Math.max(12, clampTargetPostCount(targetCount) * SCAN_LIMITS.candidateMultiplier);
   }
 
-  // 在目標貼文數較大時放寬最大掃描視窗數。
+  // 安全掃描上限跟著目標貼文數動態調整，目前採用目標篇數 * 2。
   function getDynamicMaxWindows(targetCount = STATE.config.maxPostsPerScan) {
-    const normalizedTarget = clampTargetPostCount(targetCount);
-    if (normalizedTarget >= 8) {
-      return SCAN_LIMITS.extendedMaxWindows;
-    }
-    return SCAN_LIMITS.baseMaxWindows;
+    return clampTargetPostCount(targetCount) * SCAN_LIMITS.maxWindowMultiplier;
+  }
+
+  // 已看過貼文的去重保留數量跟著目標貼文數動態調整，目前採用目標篇數 * 2。
+  function getDynamicSeenPostLimit(targetCount = STATE.config.maxPostsPerScan) {
+    return clampTargetPostCount(targetCount) * SCAN_LIMITS.seenPostMultiplier;
   }
 
   // 讀取並正規化已保存的 ntfy topic。
@@ -326,6 +334,23 @@
       saveString(STORAGE_KEYS.ntfyTopic, topic);
     } else {
       removeStorageKey(STORAGE_KEYS.ntfyTopic);
+    }
+  }
+
+  // 讀取並正規化已保存的 Discord Webhook URL。
+  function getPersistedDiscordWebhook() {
+    return normalizeText(loadString(STORAGE_KEYS.discordWebhook, DEFAULT_CONFIG.discordWebhook));
+  }
+
+  // 保存 Discord Webhook URL；空字串時直接移除設定。
+  function saveDiscordWebhookSetting(value) {
+    const webhook = normalizeText(value);
+    STATE.config.discordWebhook = webhook;
+
+    if (webhook) {
+      saveString(STORAGE_KEYS.discordWebhook, webhook);
+    } else {
+      removeStorageKey(STORAGE_KEYS.discordWebhook);
     }
   }
 
@@ -604,7 +629,7 @@
 
   // 以 debounce 方式安排掃描，並在 route 剛切換時多等一段穩定時間。
   function scheduleScan(reason) {
-    if (STATE.config.paused || STATE.isLoadingMorePosts) return;
+    if (STATE.config.paused || STATE.isLoadingMorePosts || STATE.isScanning) return;
     if (!isSupportedGroupPage()) {
       renderPanel();
       return;
@@ -1371,8 +1396,50 @@
     );
   }
 
+  // 建立通知欄位，供本機通知與遠端通知共用。
+  function getNotificationFields(post) {
+    return {
+      groupName: getCurrentGroupName() || "(未知)",
+      author: post?.author || "(作者未知)",
+      includeRule: post?.includeRule || "(include-all)",
+      text: truncate(post?.text || "", 220) || "(空白)",
+      permalink: post?.permalink || "",
+    };
+  }
+
+  // 建立較精簡的單行通知文字，適合桌面通知。
+  function buildCompactNotificationBody(post) {
+    const fields = getNotificationFields(post);
+    return truncate(
+      [
+        fields.groupName,
+        fields.author,
+        `match: ${fields.includeRule}`,
+        truncate(fields.text, 120),
+      ].filter(Boolean).join(" | "),
+      250
+    );
+  }
+
+  // 建立多行通知文字，格式接近「查看紀錄」的顯示方式。
+  function buildRemoteNotificationBody(post) {
+    const fields = getNotificationFields(post);
+    const lines = [
+      `社團: ${fields.groupName}`,
+      `作者: ${fields.author}`,
+      `關鍵字: ${fields.includeRule}`,
+      `內容: ${fields.text}`,
+    ];
+
+    if (fields.permalink) {
+      lines.push(`連結: ${fields.permalink}`);
+    }
+
+    return lines.join("\n");
+  }
+
   // 通知能力檢查與 ntfy 傳送。
-  // 若啟用瀏覽器通知，主動請求權限或回報目前權限狀態。
+  // 若啟用原生桌面通知，主動請求權限或回報目前權限狀態。
   async function requestBrowserNotificationPermission() {
     try {
       if (!("Notification" in window)) return "unsupported";
@@ -1419,6 +1486,121 @@
         resolve("ntfy_failed");
       }
     });
+  }
+
+  // 透過 Discord Webhook 傳送遠端通知；未設定 URL 時直接跳過。
+  function sendDiscordWebhookNotification({ title, body, clickUrl }) {
+    const webhook = getPersistedDiscordWebhook();
+    STATE.config.discordWebhook = webhook;
+    if (!webhook) {
+      return Promise.resolve("discord_skipped");
+    }
+
+    const content = truncate(
+      [title, body, clickUrl].filter(Boolean).join("\n"),
+      1900
+    );
+
+    return new Promise((resolve) => {
+      try {
+        GM_xmlhttpRequest({
+          method: "POST",
+          url: webhook,
+          data: JSON.stringify({ content }),
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+          },
+          onload: (response) => {
+            if (response.status >= 200 && response.status < 300) {
+              resolve("discord_sent");
+              return;
+            }
+            resolve(`discord_failed:${response.status}`);
+          },
+          onerror: () => resolve("discord_failed"),
+          ontimeout: () => resolve("discord_timeout"),
+        });
+      } catch (error) {
+        resolve("discord_failed");
+      }
+    });
+  }
+
+  // 讀取各社團最近一次最上方貼文快照，用於快速判斷是否需要深度掃描。
+  function getLatestTopPostsStore() {
+    const store = loadJson(STORAGE_KEYS.latestTopPosts, {});
+    return store && typeof store === "object" ? store : {};
+  }
+
+  // 寫回各社團最近一次最上方貼文快照。
+  function setLatestTopPostsStore(store) {
+    saveJson(STORAGE_KEYS.latestTopPosts, store);
+  }
+
+  // 讀取指定社團最近一次最上方貼文快照。
+  function getLatestTopPostForGroup(groupId) {
+    if (!groupId) return null;
+    const store = getLatestTopPostsStore();
+    const snapshot = store[groupId];
+    return snapshot && typeof snapshot === "object" ? snapshot : null;
+  }
+
+  // 保存指定社團最近一次最上方貼文快照。
+  function setLatestTopPostForGroup(groupId, post) {
+    if (!groupId || !post) return;
+
+    const postKey = getPostKey(post);
+    if (!postKey) return;
+
+    const store = getLatestTopPostsStore();
+    store[groupId] = {
+      postKey,
+      author: post.author || "",
+      text: truncate(post.text || "", 160),
+      updatedAt: new Date().toISOString(),
+    };
+    setLatestTopPostsStore(store);
+  }
+
+  // 讀取各社團最近一次完整掃描後的貼文清單，用於快篩命中時沿用上一輪顯示結果。
+  function getLatestScanPostsStore() {
+    const store = loadJson(STORAGE_KEYS.latestScanPosts, {});
+    return store && typeof store === "object" ? store : {};
+  }
+
+  // 寫回各社團最近一次完整掃描後的貼文清單。
+  function setLatestScanPostsStore(store) {
+    saveJson(STORAGE_KEYS.latestScanPosts, store);
+  }
+
+  // 讀取指定社團最近一次完整掃描後的貼文清單。
+  function getLatestScanPostsForGroup(groupId) {
+    if (!groupId) return [];
+    const store = getLatestScanPostsStore();
+    const posts = store[groupId];
+    return Array.isArray(posts) ? posts : [];
+  }
+
+  // 保存指定社團最近一次完整掃描後的貼文清單。
+  function setLatestScanPostsForGroup(groupId, posts) {
+    if (!groupId) return;
+
+    const normalizedPosts = Array.isArray(posts)
+      ? posts.filter((post) => post && typeof post === "object")
+      : [];
+
+    const store = getLatestScanPostsStore();
+    store[groupId] = normalizedPosts;
+    setLatestScanPostsStore(store);
+  }
+
+  // 只有例行掃描才啟用最上方貼文快篩，避免手動操作時誤跳過完整掃描。
+  function shouldUseTopPostShortcut(reason) {
+    return (
+      reason !== "manual-start" &&
+      reason !== "save" &&
+      reason !== "route-change"
+    );
   }
 
   // 去重鍵、已見貼文與命中歷史的持久化狀態管理。
@@ -1502,26 +1684,40 @@
 
   // 將貼文標記為已看過，並依時間保留最近 N 筆。
   function markPostSeen(groupId, postKey) {
+    const normalizedGroupId = String(groupId || "");
     const store = getSeenPostsStore();
-    if (!store[groupId] || typeof store[groupId] !== "object") {
-      store[groupId] = {};
+    const nextGroupStore = (
+      store[normalizedGroupId] && typeof store[normalizedGroupId] === "object"
+        ? store[normalizedGroupId]
+        : {}
+    );
+
+    const nextStore = {};
+    if (normalizedGroupId) {
+      nextStore[normalizedGroupId] = nextGroupStore;
     }
 
-    store[groupId][postKey] = new Date().toISOString();
+    nextGroupStore[postKey] = new Date().toISOString();
 
-    const entries = Object.entries(store[groupId]).sort((a, b) => {
+    const entries = Object.entries(nextGroupStore).sort((a, b) => {
       return new Date(b[1]).getTime() - new Date(a[1]).getTime();
     });
 
-    store[groupId] = Object.fromEntries(entries.slice(0, STATE.config.seenPostLimitPerGroup));
-    setSeenPostsStore(store);
+    nextStore[normalizedGroupId] = Object.fromEntries(entries.slice(0, getDynamicSeenPostLimit()));
+    setSeenPostsStore(nextStore);
   }
 
-  // 清空指定群組的已看過貼文紀錄。
+  // 清空指定群組的已看過貼文紀錄，並移除其他群組殘留的去重資料。
   function clearSeenPostsForGroup(groupId) {
-    const store = getSeenPostsStore();
-    store[groupId] = {};
-    setSeenPostsStore(store);
+    const normalizedGroupId = String(groupId || "");
+    if (!normalizedGroupId) {
+      setSeenPostsStore({});
+      return;
+    }
+
+    setSeenPostsStore({
+      [normalizedGroupId]: {},
+    });
   }
 
   // 讀取命中通知歷史；新版使用全域陣列，舊版依社團分組資料會在讀取時攤平。
@@ -1557,7 +1753,7 @@
     flattened.sort((a, b) => {
       return new Date(b.notifiedAt || 0).getTime() - new Date(a.notifiedAt || 0).getTime();
     });
-    return flattened.slice(0, STATE.config.matchHistoryLimitPerGroup);
+    return flattened.slice(0, STATE.config.matchHistoryGlobalLimit);
   }
 
   // 寫回全域命中通知歷史。
@@ -1604,7 +1800,7 @@
     });
 
     setMatchHistoryStore(
-      [...nextEntries, ...existing].slice(0, STATE.config.matchHistoryLimitPerGroup)
+      [...nextEntries, ...existing].slice(0, STATE.config.matchHistoryGlobalLimit)
     );
   }
 
@@ -1705,6 +1901,97 @@
     }
 
     return { posts, meta };
+  }
+
+  // 只掃描目前可見視窗，用於最上方貼文快篩命中後的快速返回。
+  async function collectVisiblePostsOnly() {
+    const targetPostCount = clampTargetPostCount(STATE.config.maxPostsPerScan);
+    const candidates = collectPostContainers(getCandidateCollectionLimit(1));
+    const collected = await collectPostsFromCandidates(candidates, new WeakMap());
+    const posts = dedupeExtractedPosts(collected.posts, targetPostCount);
+
+    return {
+      posts,
+      meta: {
+        targetCount: targetPostCount,
+        mode: STATE.config.autoLoadMorePosts ? STATE.config.loadMoreMode : "off",
+        attempted: false,
+        attempts: 0,
+        maxWindowCount: STATE.config.autoLoadMorePosts ? getDynamicMaxWindows(targetPostCount) : 1,
+        stagnantWindows: 0,
+        stopReason: "",
+        beforeCount: candidates.length,
+        afterCount: candidates.length,
+        windowCount: 1,
+        candidateCount: candidates.length,
+        cacheHitCount: collected.meta.cacheHitCount,
+        freshExtractCount: collected.meta.freshExtractCount,
+        parsedCount: posts.length,
+        accumulatedCount: posts.length,
+        filteredEmptyTextCount: collected.meta.filteredEmptyTextCount,
+        filteredNonPostCount: collected.meta.filteredNonPostCount,
+        filteredFeedSortControlCount: collected.meta.filteredFeedSortControlCount,
+        articleElementCount: collected.meta.articleElementCount,
+        postsWithPostIdCount: collected.meta.postsWithPostIdCount,
+        topPostShortcutUsed: false,
+        topPostShortcutMatched: false,
+      },
+    };
+  }
+
+  // 先比對最上方最新貼文是否與上一輪相同；相同時直接跳過深度掃描。
+  async function collectPostsWithTopPostShortcut(reason, groupId) {
+    const visibleResult = await collectVisiblePostsOnly();
+    const topPost = visibleResult.posts[0] || null;
+    const topPostKey = topPost ? getPostKey(topPost) : "";
+
+    visibleResult.meta.topPostShortcutUsed = true;
+    visibleResult.meta.topPostKey = topPostKey;
+
+    if (!STATE.config.autoLoadMorePosts) {
+      visibleResult.meta.stopReason = "已停用自動載入更多貼文";
+      return visibleResult;
+    }
+
+    if (!shouldUseTopPostShortcut(reason)) {
+      visibleResult.meta.topPostShortcutMatched = false;
+      return null;
+    }
+
+    if (getCurrentFeedSortLabel() !== "新貼文") {
+      visibleResult.meta.topPostShortcutMatched = false;
+      return null;
+    }
+
+    if (!topPost || !topPostKey) {
+      visibleResult.meta.topPostShortcutMatched = false;
+      return null;
+    }
+
+    const previousTopPost = getLatestTopPostForGroup(groupId);
+    visibleResult.meta.previousTopPostKey = previousTopPost?.postKey || "";
+
+    if (!previousTopPost?.postKey) {
+      setLatestTopPostForGroup(groupId, topPost);
+      visibleResult.meta.topPostShortcutMatched = false;
+      return null;
+    }
+
+    if (previousTopPost.postKey === topPostKey) {
+      const cachedPosts = getLatestScanPostsForGroup(groupId);
+      visibleResult.meta.topPostShortcutMatched = true;
+      visibleResult.meta.stopReason = "最上方貼文未變更，跳過深度掃描";
+      if (cachedPosts.length) {
+        visibleResult.posts = cachedPosts.slice(0, clampTargetPostCount(STATE.config.maxPostsPerScan));
+        visibleResult.meta.parsedCount = visibleResult.posts.length;
+        visibleResult.meta.accumulatedCount = visibleResult.posts.length;
+      }
+      return visibleResult;
+    }
+
+    setLatestTopPostForGroup(groupId, topPost);
+    visibleResult.meta.topPostShortcutMatched = false;
+    return null;
   }
 
   // 在當前視窗與後續滾動視窗中累積貼文，直到足夠或達到保守上限。
@@ -1880,6 +2167,9 @@
       renderPanel();
       return;
     }
+    if (STATE.isScanning) return;
+
+    STATE.isScanning = true;
 
     try {
       const supported = isSupportedGroupPage();
@@ -1898,12 +2188,21 @@
           candidateCount: 0,
           parsedCount: 0,
           accumulatedCount: 0,
+          topPostShortcutUsed: false,
+          topPostShortcutMatched: false,
         },
       };
       if (supported) {
-        collectedResult = await collectPostsAcrossWindows();
+        const shortcutResult = await collectPostsWithTopPostShortcut(reason, groupId);
+        collectedResult = shortcutResult || await collectPostsAcrossWindows();
       }
       const uniquePosts = collectedResult.posts;
+      if (supported && uniquePosts.length) {
+        setLatestTopPostForGroup(groupId, uniquePosts[0]);
+      }
+      if (supported && !collectedResult.meta.topPostShortcutMatched) {
+        setLatestScanPostsForGroup(groupId, uniquePosts);
+      }
       const candidateCount = collectedResult.meta.candidateCount;
       const parsedCount = collectedResult.meta.parsedCount;
       const uniqueCount = uniquePosts.length;
@@ -1987,6 +2286,10 @@
         loadMoreAfterCount: collectedResult.meta.afterCount ?? 0,
         loadMoreWindowCount: collectedResult.meta.windowCount ?? 0,
         accumulatedCount: collectedResult.meta.accumulatedCount ?? 0,
+        topPostShortcutUsed: collectedResult.meta.topPostShortcutUsed || false,
+        topPostShortcutMatched: collectedResult.meta.topPostShortcutMatched || false,
+        topPostKey: collectedResult.meta.topPostKey || "",
+        previousTopPostKey: collectedResult.meta.previousTopPostKey || "",
         filteredEmptyTextCount: collectedResult.meta.filteredEmptyTextCount ?? 0,
         filteredNonPostCount: collectedResult.meta.filteredNonPostCount ?? 0,
         filteredFeedSortControlCount: collectedResult.meta.filteredFeedSortControlCount ?? 0,
@@ -2002,6 +2305,7 @@
       STATE.latestError = String(error && error.message ? error.message : error);
       console.error("[fb-group-refresh] scan failed", error);
     } finally {
+      STATE.isScanning = false;
       scheduleRefresh();
       renderPanel();
     }
@@ -2023,19 +2327,16 @@
   }
 
   // 通知分發與手動測試通知。
-  // 依目前設定分送 GM_notification、Browser Notification 與 ntfy。
+  // 依目前設定分送桌面通知、ntfy 與 Discord Webhook。
   async function notifyForPost(post) {
     const title = "Facebook group match";
-    const matchedRule = post.includeRule || "(include-all)";
-    const body = truncate(
-      [post.author, `match: ${matchedRule}`, truncate(post.text, 120)].filter(Boolean).join(" | "),
-      250
-    );
+    const compactBody = buildCompactNotificationBody(post);
+    const remoteBody = buildRemoteNotificationBody(post);
     const statusParts = [];
 
     STATE.latestNotification = {
       title,
-      body,
+      body: remoteBody,
       permalink: post.permalink,
       timestamp: new Date().toISOString(),
       status: "pending",
@@ -2046,7 +2347,7 @@
       try {
         GM_notification({
           title,
-          text: body,
+          text: compactBody,
           timeout: 15000,
         });
         statusParts.push("gm_sent");
@@ -2059,7 +2360,7 @@
     if (STATE.config.enableBrowserNotification && "Notification" in window) {
       try {
         if (Notification.permission === "granted") {
-          const notification = new Notification(title, { body });
+          const notification = new Notification(title, { body: compactBody });
           if (post.permalink) {
             notification.onclick = () => {
               window.open(post.permalink, "_blank", "noopener,noreferrer");
@@ -2075,11 +2376,20 @@
     // ntfy 為 opt-in 遠端通知通道；未設定 topic 時會直接略過。
     const ntfyStatus = await sendNtfyNotification({
       title,
-      body,
+      body: remoteBody,
       clickUrl: post.permalink,
     });
     if (ntfyStatus !== "ntfy_skipped") {
       statusParts.push(ntfyStatus);
+    }
+
+    const discordStatus = await sendDiscordWebhookNotification({
+      title,
+      body: remoteBody,
+      clickUrl: post.permalink,
+    });
+    if (discordStatus !== "discord_skipped") {
+      statusParts.push(discordStatus);
     }
 
     STATE.latestNotification.status = statusParts.length ? statusParts.join(", ") : "no_channel_sent";
@@ -2111,7 +2421,7 @@
       "display:none",
       "position:fixed",
       "inset:0",
-      "z-index:2147483645",
+      "z-index:2147483644",
       "background:rgba(0,0,0,0.55)",
       "padding:24px",
       "box-sizing:border-box",
@@ -2162,6 +2472,10 @@
             ? `<a href="${escapeHtml(item.permalink)}" target="_blank" rel="noopener noreferrer" style="color:#93c5fd;">開啟貼文</a>`
             : "";
           const notifiedAtLabel = escapeHtml(formatNotificationTimestamp(item.notifiedAt));
+          const groupRow = renderHistoryFieldRow(
+            "社團",
+            escapeHtml(item.groupName || item.groupId || "(未知)")
+          );
           const authorRow = renderHistoryFieldRow("作者", escapeHtml(item.author || "(無)"));
           const keywordRow = renderHistoryFieldRow("關鍵字", escapeHtml(item.includeRule || "(無)"));
           const notifiedAtRow = renderHistoryFieldRow("通知時間", notifiedAtLabel);
@@ -2169,19 +2483,15 @@
             "內容",
             renderHighlightedHistoryContent(truncate(item.text, 220) || "(空白)", item.includeRule)
           );
-          const groupRow = renderHistoryFieldRow(
-            "社團",
-            escapeHtml(item.groupName || item.groupId || "(未知)"),
-            { marginTop: 10 }
-          );
           return `
             <div style="padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
               <div>#${index + 1}</div>
+              ${groupRow}
+              <div style="height:10px;"></div>
               ${authorRow}
               ${keywordRow}
               ${notifiedAtRow}
               ${contentRow}
-              ${groupRow}
               ${linkHtml ? `<div style="margin-top:6px;">${linkHtml}</div>` : ""}
             </div>
           `;
@@ -2209,7 +2519,7 @@
       "display:none",
       "position:fixed",
       "inset:0",
-      "z-index:2147483644",
+      "z-index:2147483646",
       "background:rgba(0,0,0,0.55)",
       "padding:24px",
       "box-sizing:border-box",
@@ -2263,8 +2573,132 @@
     if (overlay) overlay.style.display = "none";
   }
 
+  // UI: ntfy 說明視窗。
+  // 建立 ntfy 說明視窗，說明 topic 的用途與基本設定步驟。
+  function createNtfyHelpModal() {
+    if (document.getElementById("fbgr-ntfy-help-modal")) return;
+
+    const overlay = document.createElement("div");
+    overlay.id = "fbgr-ntfy-help-modal";
+    overlay.style.cssText = [
+      "display:none",
+      "position:fixed",
+      "inset:0",
+      "z-index:2147483647",
+      "background:rgba(0,0,0,0.55)",
+      "padding:24px",
+      "box-sizing:border-box",
+    ].join(";");
+
+    overlay.innerHTML = `
+      <div style="max-width:520px;margin:40px auto 0 auto;background:#111827;color:#f9fafb;border:1px solid #4b5563;border-radius:14px;padding:16px;box-shadow:0 18px 40px rgba(0,0,0,0.4);font-family:Consolas, 'Courier New', monospace;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px;">
+          <div style="font-size:16px;font-weight:bold;">ntfy 說明</div>
+          <button id="fbgr-ntfy-help-close" style="padding:4px 8px;cursor:pointer;">關閉</button>
+        </div>
+        <div style="display:grid;gap:12px;line-height:1.6;">
+          <div>不填 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy topic</code> 也可以使用，腳本仍會透過桌面通知在電腦上提醒你。</div>
+          <div>如果希望手機也同步收到提醒，可以另外設定 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy</code>。</div>
+          <div style="display:grid;gap:6px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
+            <div style="font-weight:bold;">建議步驟</div>
+            <div>1. 在手機上安裝 ntfy App</div>
+            <div>2. 在 App 內按 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">+</code>，輸入 topic，例如 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">my-facebook-alerts</code></div>
+            <div>3. 建議使用英文字母、數字、減號或底線</div>
+            <div>4. 回到電腦上的 Facebook 頁面，在腳本面板中按「設定」</div>
+            <div>5. 在 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy topic</code> 輸入完全相同的 topic</div>
+            <div>6. 按一次「測試通知」，確認手機 App 是否有收到通知；通知可能會有些許延遲</div>
+          </div>
+          <div style="font-size:12px;color:#d1d5db;">若你另外修改了刷新秒數、掃描貼文數等其他設定，再按「儲存設定」。</div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) {
+        closeNtfyHelpModal();
+      }
+    });
+    overlay.querySelector("#fbgr-ntfy-help-close").addEventListener("click", closeNtfyHelpModal);
+  }
+
+  // 顯示 ntfy 說明視窗。
+  function openNtfyHelpModal() {
+    createNtfyHelpModal();
+    const overlay = document.getElementById("fbgr-ntfy-help-modal");
+    if (overlay) overlay.style.display = "block";
+  }
+
+  // 關閉 ntfy 說明視窗。
+  function closeNtfyHelpModal() {
+    const overlay = document.getElementById("fbgr-ntfy-help-modal");
+    if (overlay) overlay.style.display = "none";
+  }
+
+  // UI: Discord Webhook 說明視窗。
+  // 建立 Discord Webhook 說明視窗，說明 URL 的用途與基本設定步驟。
+  function createDiscordHelpModal() {
+    if (document.getElementById("fbgr-discord-help-modal")) return;
+
+    const overlay = document.createElement("div");
+    overlay.id = "fbgr-discord-help-modal";
+    overlay.style.cssText = [
+      "display:none",
+      "position:fixed",
+      "inset:0",
+      "z-index:2147483647",
+      "background:rgba(0,0,0,0.55)",
+      "padding:24px",
+      "box-sizing:border-box",
+    ].join(";");
+
+    overlay.innerHTML = `
+      <div style="max-width:520px;margin:40px auto 0 auto;background:#111827;color:#f9fafb;border:1px solid #4b5563;border-radius:14px;padding:16px;box-shadow:0 18px 40px rgba(0,0,0,0.4);font-family:Consolas, 'Courier New', monospace;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px;">
+          <div style="font-size:16px;font-weight:bold;">Discord Webhook 說明</div>
+          <button id="fbgr-discord-help-close" style="padding:4px 8px;cursor:pointer;">關閉</button>
+        </div>
+        <div style="display:grid;gap:12px;line-height:1.6;">
+          <div>不填 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">Discord Webhook URL</code> 也可以使用，腳本仍會透過桌面通知在電腦上提醒你。</div>
+          <div>如果希望通知直接送到 Discord 頻道，可以另外設定 Discord Webhook。</div>
+          <div style="display:grid;gap:6px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
+            <div style="font-weight:bold;">建議步驟</div>
+            <div>1. 在 Discord 選擇目標頻道，進入「編輯頻道」</div>
+            <div>2. 點選「整合」→「Webhooks」→「新 Webhook」</div>
+            <div>3. 複製 Webhook URL</div>
+            <div>4. 回到電腦上的 Facebook 頁面，在腳本面板中按「設定」</div>
+            <div>5. 在 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">Discord Webhook URL</code> 貼上剛剛複製的網址</div>
+            <div>6. 按一次「測試通知」，確認 Discord 頻道是否有收到通知；通知可能會有些許延遲</div>
+          </div>
+          <div style="font-size:12px;color:#d1d5db;">留空則不會傳送 Discord 通知。</div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) {
+        closeDiscordHelpModal();
+      }
+    });
+    overlay.querySelector("#fbgr-discord-help-close").addEventListener("click", closeDiscordHelpModal);
+  }
+
+  // 顯示 Discord Webhook 說明視窗。
+  function openDiscordHelpModal() {
+    createDiscordHelpModal();
+    const overlay = document.getElementById("fbgr-discord-help-modal");
+    if (overlay) overlay.style.display = "block";
+  }
+
+  // 關閉 Discord Webhook 說明視窗。
+  function closeDiscordHelpModal() {
+    const overlay = document.getElementById("fbgr-discord-help-modal");
+    if (overlay) overlay.style.display = "none";
+  }
+
   // UI: 設定視窗與刷新模式切換。
-  // 建立設定視窗，集中管理 refresh、load more 與 ntfy topic。
+  // 建立設定視窗，集中管理 refresh、load more、ntfy 與 Discord Webhook。
   function createSettingsModal() {
     if (document.getElementById("fbgr-settings-modal")) return;
 
@@ -2274,7 +2708,7 @@
       "display:none",
       "position:fixed",
       "inset:0",
-      "z-index:2147483646",
+      "z-index:2147483645",
       "background:rgba(0,0,0,0.55)",
       "padding:24px",
       "box-sizing:border-box",
@@ -2311,14 +2745,24 @@
           </div>
           <div style="display:grid;gap:4px;">
             <label for="fbgr-max-posts-per-scan">目標掃描貼文數</label>
-            <input id="fbgr-max-posts-per-scan" type="number" min="1" max="8" step="1" style="padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;" />
+            <input id="fbgr-max-posts-per-scan" type="number" min="1" max="10" step="1" style="padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;" />
           </div>
           <div style="display:grid;gap:4px;">
-            <label for="fbgr-ntfy-topic">ntfy topic</label>
+            <label for="fbgr-ntfy-topic" style="display:flex;align-items:center;gap:6px;">
+              <span>ntfy topic (選填)</span>
+              <button id="fbgr-ntfy-help" type="button" style="width:20px;height:20px;border-radius:999px;border:1px solid #6b7280;background:#111827;color:#f9fafb;cursor:pointer;padding:0;line-height:1;">?</button>
+            </label>
             <input id="fbgr-ntfy-topic" type="text" placeholder="例如：my-facebook-alerts" style="padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;" />
           </div>
+          <div style="display:grid;gap:4px;">
+            <label for="fbgr-discord-webhook" style="display:flex;align-items:center;gap:6px;">
+              <span>Discord Webhook URL (選填)</span>
+              <button id="fbgr-discord-help" type="button" style="width:20px;height:20px;border-radius:999px;border:1px solid #6b7280;background:#111827;color:#f9fafb;cursor:pointer;padding:0;line-height:1;">?</button>
+            </label>
+            <input id="fbgr-discord-webhook" type="text" placeholder="例如：https://discord.com/api/webhooks/..." style="padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;" />
+          </div>
           <div style="padding:10px;border:1px solid #374151;border-radius:8px;background:rgba(255,255,255,0.03);color:#d1d5db;">
-            系統會盡量湊滿你設定的貼文數，最多可設定 8 篇；若連續多輪都抓不到新貼文，會先停下等待下一輪。頁面內查看紀錄仍保留最新 10 筆符合關鍵字的通知紀錄。
+            系統會盡量湊滿你設定的貼文數，最多可設定 10 篇。頁面內查看紀錄仍保留最新 10 筆符合關鍵字的通知紀錄。
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-start;">
             <button id="fbgr-settings-test" style="padding:6px 10px;cursor:pointer;">測試通知</button>
@@ -2342,14 +2786,19 @@
     overlay.querySelector("#fbgr-settings-close").addEventListener("click", closeSettingsModal);
     overlay.querySelector("#fbgr-settings-cancel").addEventListener("click", closeSettingsModal);
     overlay.querySelector("#fbgr-jitter-enabled").addEventListener("change", renderSettingsMode);
+    overlay.querySelector("#fbgr-ntfy-help").addEventListener("click", openNtfyHelpModal);
+    overlay.querySelector("#fbgr-discord-help").addEventListener("click", openDiscordHelpModal);
     overlay.querySelector("#fbgr-settings-test").addEventListener("click", () => {
       const ntfyTopic = normalizeText(overlay.querySelector("#fbgr-ntfy-topic").value);
+      const discordWebhook = normalizeText(overlay.querySelector("#fbgr-discord-webhook").value);
       saveNtfyTopicSetting(ntfyTopic);
+      saveDiscordWebhookSetting(discordWebhook);
       sendTestNotification();
     });
     overlay.querySelector("#fbgr-settings-save").addEventListener("click", () => {
       const jitterEnabled = overlay.querySelector("#fbgr-jitter-enabled").checked;
       const ntfyTopic = normalizeText(overlay.querySelector("#fbgr-ntfy-topic").value);
+      const discordWebhook = normalizeText(overlay.querySelector("#fbgr-discord-webhook").value);
       const autoLoadMorePosts = overlay.querySelector("#fbgr-auto-load-more").checked;
       const minRefreshSec = Math.max(5, Math.floor(Number(overlay.querySelector("#fbgr-refresh-min").value) || STATE.config.minRefreshSec));
       const maxRefreshSec = Math.max(5, Math.floor(Number(overlay.querySelector("#fbgr-refresh-max").value) || STATE.config.maxRefreshSec));
@@ -2358,6 +2807,7 @@
 
       STATE.config.jitterEnabled = jitterEnabled;
       STATE.config.ntfyTopic = ntfyTopic;
+      STATE.config.discordWebhook = discordWebhook;
       STATE.config.autoLoadMorePosts = autoLoadMorePosts;
       STATE.config.loadMoreMode = DEFAULT_CONFIG.loadMoreMode;
       STATE.config.minRefreshSec = minRefreshSec;
@@ -2388,8 +2838,10 @@
     if (!overlay) return;
 
     STATE.config.ntfyTopic = getPersistedNtfyTopic();
+    STATE.config.discordWebhook = getPersistedDiscordWebhook();
     overlay.querySelector("#fbgr-jitter-enabled").checked = STATE.config.jitterEnabled;
     overlay.querySelector("#fbgr-ntfy-topic").value = STATE.config.ntfyTopic;
+    overlay.querySelector("#fbgr-discord-webhook").value = STATE.config.discordWebhook;
     overlay.querySelector("#fbgr-auto-load-more").checked = STATE.config.autoLoadMorePosts;
     overlay.querySelector("#fbgr-refresh-min").value = String(STATE.config.minRefreshSec);
     overlay.querySelector("#fbgr-refresh-max").value = String(STATE.config.maxRefreshSec);
@@ -2416,7 +2868,7 @@
       "position:fixed",
       "top:16px",
       "right:16px",
-      "z-index:2147483647",
+      "z-index:2147483643",
       "width:380px",
       "max-height:84vh",
       "overflow:auto",
@@ -2468,6 +2920,8 @@
     createSettingsModal();
     createHistoryModal();
     createIncludeHelpModal();
+    createNtfyHelpModal();
+    createDiscordHelpModal();
 
     panel.querySelector("#fbgr-include").addEventListener("input", persistDraftInputs);
     panel.querySelector("#fbgr-exclude").addEventListener("input", persistDraftInputs);
@@ -2732,10 +3186,13 @@
           <div>首次掃描: ${latestScan?.baselineMode ? "是" : "否"}</div>
           <div>目標貼文數: ${latestScan?.targetCount ?? STATE.config.maxPostsPerScan}</div>
           <div>自動載入方式: ${escapeHtml(latestScan?.loadMoreMode || STATE.config.loadMoreMode)}</div>
+          <div>最上方快篩: ${latestScan?.topPostShortcutUsed ? (latestScan?.topPostShortcutMatched ? "命中，已跳過深度掃描" : "已檢查，需完整掃描") : "未啟用"}</div>
           <div>自動載入嘗試: ${latestScan?.loadMoreAttempted ? `${latestScan?.loadMoreAttempts || 0} 次` : "未執行"}</div>
           <div>安全掃描上限: ${latestScan?.maxWindowCount ?? 0} 輪</div>
           <div>視窗掃描次數: ${latestScan?.loadMoreWindowCount ?? 0}</div>
           <div>停止原因: ${escapeHtml(latestScan?.stopReason || "(無)")}</div>
+          <div>本輪最上方貼文 key: ${escapeHtml(latestScan?.topPostKey || "(無)")}</div>
+          <div>上一輪最上方貼文 key: ${escapeHtml(latestScan?.previousTopPostKey || "(無)")}</div>
           <div>貼文數變化: ${(latestScan?.loadMoreBeforeCount ?? 0)} -> ${(latestScan?.loadMoreAfterCount ?? 0)}</div>
           <div>累積候選容器次數: ${latestScan?.candidateCount ?? 0}</div>
           <div>實際解析次數: ${latestScan?.freshExtractCount ?? 0}</div>

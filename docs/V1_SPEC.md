@@ -81,6 +81,7 @@ Suggested settings:
 - include keywords
 - exclude keywords
 - `ntfy` topic
+- Discord Webhook URL
 - monitoring paused flag
 - debug panel visible flag
 - refresh min seconds
@@ -148,7 +149,8 @@ The extractor should inspect only the most recent N posts per pass.
 
 Current implementation target:
 - accumulate up to a user-configurable number of unique posts across multiple visible feed windows
-- keep seen-post history bounded to 5 per group
+- keep seen-post dedupe only for the currently monitored group
+- keep seen-post history bounded to `target post count * 2`
 - keep match-history records bounded to 10 globally, with group name shown per entry
 
 ## Matching flow
@@ -175,15 +177,15 @@ The seen-post store should:
 - include notification timestamp
 
 Current implementation note:
-- seen-post dedupe remains namespaced by group
+- seen-post dedupe remains namespaced by group, but only the current group's bucket is retained
 - match-history is now rendered as one global list rather than per-group buckets
 
 ## Notification behavior
 
 V1 notification channels:
-- local userscript notification
-- optional browser notification
+- local desktop notification
 - optional `ntfy`
+- optional Discord Webhook
 
 Rules:
 - test notification must not add a fake post into dedupe storage
@@ -198,9 +200,10 @@ Suggested notification content:
 - post link
 
 Current implementation notes:
-- local userscript notification is enabled by default
-- browser-native notification exists in code but is not currently exposed as a user-facing setting
+- local desktop notification via `GM_notification` is enabled by default
+- browser-native notification code still exists internally but is not currently exposed as a user-facing setting
 - `ntfy` is optional and only sends when a topic is configured
+- Discord Webhook is optional and only sends when a webhook URL is configured
 
 ## Debug panel
 

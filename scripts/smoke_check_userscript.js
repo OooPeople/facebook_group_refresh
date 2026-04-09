@@ -12,6 +12,20 @@ function assert(condition, message) {
   }
 }
 
+function assertEqual(actual, expected, message) {
+  if (actual !== expected) {
+    throw new Error(`${message}\nExpected: ${expected}\nActual: ${actual}`);
+  }
+}
+
+function assertDeepEqual(actual, expected, message) {
+  const actualJson = JSON.stringify(actual);
+  const expectedJson = JSON.stringify(expected);
+  if (actualJson !== expectedJson) {
+    throw new Error(`${message}\nExpected: ${expectedJson}\nActual: ${actualJson}`);
+  }
+}
+
 function createTestContext() {
   class FakeHTMLElement {}
   class FakeHTMLAnchorElement extends FakeHTMLElement {}
@@ -42,9 +56,9 @@ function createTestContext() {
       this.disconnect = () => {};
     },
     location: {
-      href: "https://www.facebook.com/groups/test-group/",
+      href: "https://www.facebook.com/groups/123456789012345/",
       hostname: "www.facebook.com",
-      pathname: "/groups/test-group/",
+      pathname: "/groups/123456789012345/",
       reload() {},
     },
     navigator: {},
@@ -57,7 +71,7 @@ function createTestContext() {
     },
     document: {
       readyState: "loading",
-      title: "測試社團 | Facebook",
+      title: "Test Group | Facebook",
       body: null,
       addEventListener() {},
       querySelector() {
@@ -99,6 +113,7 @@ function createTestContext() {
     scrollBy() {},
     scrollTo() {},
     innerHeight: 900,
+    innerWidth: 1280,
   };
 
   context.Notification.permission = "denied";
@@ -117,145 +132,114 @@ function loadTestHooks() {
 
   const context = createTestContext();
   vm.createContext(context);
-  new vm.Script(source, {
-    filename: userScriptPath,
-  }).runInContext(context);
+  new vm.Script(source, { filename: userScriptPath }).runInContext(context);
 
   const hooks = context.__FB_GROUP_REFRESH_TEST_HOOKS__;
   assert(hooks && typeof hooks === "object", "Missing exported test hooks.");
   return hooks;
 }
 
+function runTest(name, fn) {
+  try {
+    fn();
+  } catch (error) {
+    error.message = `[${name}] ${error.message}`;
+    throw error;
+  }
+}
+
 function runTests(hooks) {
-  assert(
-    hooks.getPauseToggleAction(true) === "restart",
-    "Expected paused state to map to restart semantics."
-  );
-  assert(
-    hooks.getPauseToggleAction(false) === "pause",
-    "Expected active state to map to pause semantics."
-  );
-  assert(
-    hooks.getMonitoringControlAction(true) === "restart",
-    "Expected monitoring control action to keep paused-state restart semantics."
-  );
-  assert(
-    hooks.getMonitoringControlLabel("restart") === "開始",
-    "Expected paused action label to always show start."
-  );
-  assert(
-    hooks.getMonitoringControlLabel("pause") === "暫停",
-    "Expected active action label to remain pause."
-  );
-  assert(
-    hooks.isGroupInitialized("test-group") === false,
-    "Expected groups to start in the uninitialized session state."
-  );
-  assert(
-    hooks.markGroupInitialized("test-group") === true,
-    "Expected markGroupInitialized to add a new group once."
-  );
-  assert(
-    hooks.isGroupInitialized("test-group") === true,
-    "Expected markGroupInitialized to update the session initialization state."
-  );
-  assert(
-    hooks.markGroupInitialized("test-group") === false,
-    "Expected markGroupInitialized to ignore duplicate groups."
-  );
-  assert(
-    JSON.stringify(hooks.hydrateNotificationConfigFromStorage()) ===
-      JSON.stringify({ ntfyTopic: "", discordWebhook: "" }),
-    "Expected notification hydration to reuse persisted defaults when storage is empty."
-  );
-  assert(
-    JSON.stringify(hooks.normalizePanelPosition({ top: 18.4, left: 205.6 })) ===
-      JSON.stringify({ top: 18, left: 206 }),
-    "Expected panel position normalization to round stored coordinates."
-  );
-  assert(
-    hooks.normalizePanelPosition({ top: "bad", left: 12 }) === null,
-    "Expected invalid panel position payloads to be rejected."
-  );
-  assert(
-    JSON.stringify(
-      hooks.clampPanelPosition(
-        { top: -40, left: 999 },
-        { width: 380, height: 240, viewportWidth: 1280, viewportHeight: 720 }
-      )
-    ) === JSON.stringify({ top: 12, left: 888 }),
-    "Expected panel positions to stay within viewport bounds."
-  );
-  assert(
-    JSON.stringify(
-      hooks.buildDraggedPanelPosition(
-        {
-          active: true,
-          startTop: 40,
-          startLeft: 800,
-          startPointerX: 1000,
-          startPointerY: 200,
-        },
-        { clientX: 1200, clientY: 140 },
-        { width: 380, height: 240, viewportWidth: 1280, viewportHeight: 720 }
-      )
-    ) === JSON.stringify({ top: 12, left: 888 }),
-    "Expected drag helper to apply pointer deltas and clamp the final position."
-  );
-  assert(
-    hooks.shouldUseTopPostShortcut("mutation") === true,
-    "Expected routine mutation scans to allow the top-post shortcut."
-  );
-  assert(
-    hooks.shouldUseTopPostShortcut("manual-start") === false,
-    "Expected manual-start scans to bypass the top-post shortcut."
-  );
-  assert(
-    hooks.shouldUseTopPostShortcut("save") === false,
-    "Expected save-triggered scans to bypass the top-post shortcut."
-  );
-  assert(
-    hooks.shouldUseTopPostShortcut("route-change") === false,
-    "Expected route-change scans to bypass the top-post shortcut."
-  );
-  assert(
-    JSON.stringify(hooks.buildFailedScanRuntimeState(new Error("boom"))) ===
-      JSON.stringify({ latestError: "boom" }),
-    "Expected failed scan runtime builder to normalize the error message."
-  );
-  assert(
-    JSON.stringify(
-      hooks.buildCompletedNotificationState(
-        { title: "t", status: "pending" },
-        ["gm_sent", "ntfy_sent"]
-      )
-    ) === JSON.stringify({ title: "t", status: "gm_sent, ntfy_sent" }),
-    "Expected completed notification builder to join status parts."
-  );
-  assert(
-    hooks.getLatestNotificationStatusLabel({ status: "discord_sent" }) === "discord_sent",
-    "Expected latest notification status helper to surface the stored status."
-  );
-  assert(
-    hooks.getLatestNotificationStatusLabel(null) === "(本次無)",
-    "Expected latest notification status helper to provide an empty fallback."
-  );
+  const permalinkAnchorSelector =
+    'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]';
 
-  assert(
-    JSON.stringify(
+  runTest("monitoring control semantics", () => {
+    assertEqual(
+      hooks.getPauseToggleAction(true),
+      "restart",
+      "Paused state should map to restart."
+    );
+    assertEqual(
+      hooks.getPauseToggleAction(false),
+      "pause",
+      "Active state should map to pause."
+    );
+    assertEqual(
+      hooks.getMonitoringControlAction(true),
+      "restart",
+      "Monitoring action should preserve paused-state restart semantics."
+    );
+    assertEqual(
+      hooks.getMonitoringControlLabel("restart"),
+      "開始",
+      "Restart action should render as start."
+    );
+    assertEqual(
+      hooks.getMonitoringControlLabel("pause"),
+      "暫停",
+      "Pause action should render as pause."
+    );
+  });
+
+  runTest("session initialization", () => {
+    assertEqual(
+      hooks.isGroupInitialized("123456789012345"),
+      false,
+      "Groups should start uninitialized."
+    );
+    assertEqual(
+      hooks.markGroupInitialized("123456789012345"),
+      true,
+      "First initialization should succeed."
+    );
+    assertEqual(
+      hooks.isGroupInitialized("123456789012345"),
+      true,
+      "Initialized group should be tracked."
+    );
+    assertEqual(
+      hooks.markGroupInitialized("123456789012345"),
+      false,
+      "Duplicate initialization should be ignored."
+    );
+  });
+
+  runTest("text normalization helpers", () => {
+    assertEqual(
+      hooks.normalizeText("  Alpha\u200B   Beta  "),
+      "Alpha Beta",
+      "normalizeText should trim, collapse spaces, and remove zero-width characters."
+    );
+    assertEqual(
+      hooks.normalizeForMatch(" AbC "),
+      "abc",
+      "normalizeForMatch should lower-case normalized text."
+    );
+    assertEqual(
+      hooks.normalizeForKey("A-b C_123!中文"),
+      "abc123中文",
+      "normalizeForKey should keep letters, digits, and CJK text only."
+    );
+    assertEqual(
+      hooks.buildStableTextSignature("A-b C_123!中文"),
+      "abc123中文",
+      "Stable signature should reuse normalized key shape."
+    );
+  });
+
+  runTest("config patch builders", () => {
+    assertDeepEqual(
       hooks.buildKeywordConfigPatch({
-        includeKeywords: "  搖滾 6880  ",
-        excludeKeywords: "  徵  ",
-      })
-    ) === JSON.stringify({
-      includeKeywords: "搖滾 6880",
-      excludeKeywords: "徵",
-    }),
-    "Expected keyword config builder to normalize include / exclude values."
-  );
+        includeKeywords: "  alpha beta  ",
+        excludeKeywords: "  gamma  ",
+      }),
+      {
+        includeKeywords: "alpha beta",
+        excludeKeywords: "gamma",
+      },
+      "Keyword config builder should normalize include/exclude text."
+    );
 
-  assert(
-    JSON.stringify(
+    assertDeepEqual(
       hooks.buildRefreshConfigPatch(
         {
           jitterEnabled: 0,
@@ -270,202 +254,641 @@ function runTests(hooks) {
           maxRefreshSec: 35,
           fixedRefreshSec: 60,
         }
-      )
-    ) === JSON.stringify({
-      jitterEnabled: false,
-      autoLoadMorePosts: true,
-      minRefreshSec: 5,
-      maxRefreshSec: 42,
-      fixedRefreshSec: 5,
-      maxPostsPerScan: 10,
-    }),
-    "Expected refresh config builder to normalize booleans and clamp numeric values."
-  );
+      ),
+      {
+        jitterEnabled: false,
+        autoLoadMorePosts: true,
+        minRefreshSec: 5,
+        maxRefreshSec: 42,
+        fixedRefreshSec: 5,
+        maxPostsPerScan: 10,
+      },
+      "Refresh config builder should clamp and normalize values."
+    );
 
-  assert(
-    JSON.stringify(
+    assertDeepEqual(
       hooks.buildNotificationConfigPatch({
         ntfyTopic: "  my-topic  ",
         discordWebhook: "  https://discord.example/webhook  ",
-      })
-    ) === JSON.stringify({
-      ntfyTopic: "my-topic",
-      discordWebhook: "https://discord.example/webhook",
-    }),
-    "Expected notification config builder to normalize endpoint fields."
-  );
+      }),
+      {
+        ntfyTopic: "my-topic",
+        discordWebhook: "https://discord.example/webhook",
+      },
+      "Notification config builder should normalize endpoint fields."
+    );
 
-  assert(
-    JSON.stringify(hooks.buildMonitoringConfigPatch({ paused: 0 })) ===
-      JSON.stringify({ paused: false }),
-    "Expected monitoring config builder to normalize paused flag."
-  );
+    assertDeepEqual(
+      hooks.buildMonitoringConfigPatch({ paused: 0 }),
+      { paused: false },
+      "Monitoring config builder should normalize the paused flag."
+    );
 
-  assert(
-    JSON.stringify(hooks.buildUiConfigPatch({ debugVisible: 1 })) ===
-      JSON.stringify({ debugVisible: true }),
-    "Expected UI config builder to normalize debug flag."
-  );
+    assertDeepEqual(
+      hooks.buildUiConfigPatch({ debugVisible: 1 }),
+      { debugVisible: true },
+      "UI config builder should normalize the debug flag."
+    );
 
-  assert(
-    hooks.getLoadMoreMode() === "scroll",
-    "Expected load-more mode to remain an internal fixed capability."
-  );
+    assertDeepEqual(
+      hooks.hydrateNotificationConfigFromStorage(),
+      { ntfyTopic: "", discordWebhook: "" },
+      "Notification hydration should reuse persisted defaults when storage is empty."
+    );
 
-  const refreshPayload = hooks.buildRefreshSettingsPayloadFromConfig({
-    minRefreshSec: 15,
-    maxRefreshSec: 45,
-    jitterEnabled: true,
-    fixedRefreshSec: 90,
-    maxPostsPerScan: 99,
-    autoLoadMorePosts: false,
+    assertDeepEqual(
+      hooks.buildRefreshSettingsPayloadFromConfig({
+        minRefreshSec: 15,
+        maxRefreshSec: 45,
+        jitterEnabled: true,
+        fixedRefreshSec: 90,
+        maxPostsPerScan: 99,
+        autoLoadMorePosts: false,
+      }),
+      {
+        min: 15,
+        max: 45,
+        jitterEnabled: true,
+        fixedSec: 90,
+        maxPostsPerScan: 10,
+        autoLoadMorePosts: false,
+      },
+      "Refresh payload builder should clamp maxPostsPerScan."
+    );
   });
-  assert(
-    JSON.stringify(refreshPayload) === JSON.stringify({
-      min: 15,
-      max: 45,
-      jitterEnabled: true,
-      fixedSec: 90,
-      maxPostsPerScan: 10,
-      autoLoadMorePosts: false,
-    }),
-    "Expected refresh payload builder to normalize and clamp config values."
-  );
 
-  const parsedRules = hooks.parseKeywordInput(" 搖滾 6880 ; 搖滾 5880 ; ");
-  assert(parsedRules.length === 2, "Expected two parsed keyword rules.");
-  assert(parsedRules[0].raw === "搖滾 6880", "Unexpected first keyword rule.");
-  assert(
-    JSON.stringify(parsedRules[0].terms) === JSON.stringify(["搖滾", "6880"]),
-    "Unexpected normalized keyword terms."
-  );
+  runTest("scan limits", () => {
+    assertEqual(
+      hooks.clampTargetPostCount(-1),
+      1,
+      "Target post count should clamp to minimum."
+    );
+    assertEqual(
+      hooks.clampTargetPostCount(0),
+      5,
+      "Falsy target post counts should fall back to the default target."
+    );
+    assertEqual(
+      hooks.clampTargetPostCount(999),
+      10,
+      "Target post count should clamp to maximum."
+    );
+    assertEqual(
+      hooks.getCandidateCollectionLimit(1),
+      12,
+      "Candidate collection limit should keep the minimum floor."
+    );
+    assertEqual(
+      hooks.getCandidateCollectionLimit(10),
+      60,
+      "Candidate collection limit should scale with target count."
+    );
+    assertEqual(
+      hooks.getDynamicMaxWindows(7),
+      14,
+      "Dynamic max windows should scale with the requested target count."
+    );
+    assertEqual(
+      hooks.getDynamicSeenPostLimit(7),
+      14,
+      "Dynamic seen-post limit should scale with the requested target count."
+    );
+  });
 
-  const matched = hooks.matchRules(parsedRules, hooks.normalizeForMatch("我想收搖滾 6880 兩張"));
-  assert(matched.matched === true && matched.rule === "搖滾 6880", "Expected include rule match.");
+  runTest("panel position helpers", () => {
+    assertDeepEqual(
+      hooks.normalizePanelPosition({ top: 18.4, left: 205.6 }),
+      { top: 18, left: 206 },
+      "Panel position normalization should round coordinates."
+    );
+    assertEqual(
+      hooks.normalizePanelPosition({ top: "bad", left: 12 }),
+      null,
+      "Invalid panel positions should be rejected."
+    );
+    assertDeepEqual(
+      hooks.getPanelPositionBounds({
+        width: 380,
+        height: 240,
+        viewportWidth: 1280,
+        viewportHeight: 720,
+      }),
+      {
+        width: 380,
+        height: 240,
+        viewportWidth: 1280,
+        viewportHeight: 720,
+        minLeft: 12,
+        minTop: 12,
+        maxLeft: 888,
+        maxTop: 468,
+      },
+      "Panel bounds should reserve the viewport margin."
+    );
+    assertDeepEqual(
+      hooks.clampPanelPosition(
+        { top: -40, left: 999 },
+        { width: 380, height: 240, viewportWidth: 1280, viewportHeight: 720 }
+      ),
+      { top: 12, left: 888 },
+      "Panel positions should stay within viewport bounds."
+    );
+    assertDeepEqual(
+      hooks.buildDraggedPanelPosition(
+        {
+          active: true,
+          startTop: 40,
+          startLeft: 800,
+          startPointerX: 1000,
+          startPointerY: 200,
+        },
+        { clientX: 1200, clientY: 140 },
+        { width: 380, height: 240, viewportWidth: 1280, viewportHeight: 720 }
+      ),
+      { top: 12, left: 888 },
+      "Drag helper should apply pointer deltas and clamp the final position."
+    );
+  });
 
-  const unmatched = hooks.matchRules(parsedRules, hooks.normalizeForMatch("只有 5880 沒有前綴"));
-  assert(unmatched.matched === false, "Expected no rule match.");
+  runTest("keyword matching", () => {
+    const parsedRules = hooks.parseKeywordInput("alpha beta; alpha gamma ; ");
+    assertEqual(parsedRules.length, 2, "Two keyword rules should be parsed.");
+    assertEqual(parsedRules[0].raw, "alpha beta", "First rule should be normalized.");
+    assertDeepEqual(
+      parsedRules[0].terms,
+      ["alpha", "beta"],
+      "First rule terms should be normalized and split."
+    );
 
-  assert(
-    hooks.getPostKey({ postId: "12345" }) === "id:12345",
-    "Expected postId-based key."
-  );
-  assert(
-    hooks.getPostKey({ permalink: "https://www.facebook.com/groups/x/posts/999/" }) ===
+    const matched = hooks.matchRules(parsedRules, hooks.normalizeForMatch("Alpha beta ticket"));
+    assertDeepEqual(
+      matched,
+      { matched: true, rule: "alpha beta" },
+      "Matching rule should report the original normalized rule."
+    );
+
+    const unmatched = hooks.matchRules(parsedRules, hooks.normalizeForMatch("alpha delta"));
+    assertDeepEqual(
+      unmatched,
+      { matched: false, rule: "" },
+      "Non-matching text should fail cleanly."
+    );
+  });
+
+  runTest("top-post shortcut eligibility", () => {
+    assertEqual(
+      hooks.shouldUseTopPostShortcut("mutation"),
+      true,
+      "Routine mutation scans should allow the top-post shortcut."
+    );
+    assertEqual(
+      hooks.shouldUseTopPostShortcut("manual-start"),
+      false,
+      "Manual scans should bypass the top-post shortcut."
+    );
+    assertEqual(
+      hooks.shouldUseTopPostShortcut("save"),
+      false,
+      "Save-triggered scans should bypass the top-post shortcut."
+    );
+    assertEqual(
+      hooks.shouldUseTopPostShortcut("route-change"),
+      false,
+      "Route-change scans should bypass the top-post shortcut."
+    );
+  });
+
+  runTest("permalink helpers", () => {
+    assertEqual(
+      hooks.buildCanonicalGroupPostUrl("123456789012345", "9876543210123456"),
+      "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+      "Canonical group post URL builder should use the normalized ids."
+    );
+    assertEqual(
+      hooks.buildCanonicalGroupPostUrl("123456789012345", "short"),
+      "",
+      "Canonical group post URL builder should reject invalid post ids."
+    );
+    assertDeepEqual(
+      hooks.buildPermalinkDetails(),
+      { permalink: "", source: "unavailable" },
+      "Permalink details builder should provide a stable default shape."
+    );
+    assertDeepEqual(
+      hooks.buildPermalinkDetails("https://example.com/post/1", "source"),
+      { permalink: "https://example.com/post/1", source: "source" },
+      "Permalink details builder should keep explicit values."
+    );
+    assertEqual(
+      hooks.extractGroupRouteQueryPostId(
+        new URL("https://www.facebook.com/groups/123456789012345/?story_fbid=9876543210123456")
+      ),
+      "9876543210123456",
+      "Group route query parser should read story_fbid."
+    );
+    assertEqual(
+      hooks.extractGroupRouteQueryPostId(
+        new URL("https://www.facebook.com/groups/123456789012345/?set=gm.9876543210123456")
+      ),
+      "9876543210123456",
+      "Group route query parser should read gm set ids."
+    );
+    assertEqual(
+      hooks.getPermalinkSourcePriority("groups_post_anchor"),
+      0,
+      "Direct group post anchors should have highest priority."
+    );
+    assertEqual(
+      hooks.getPermalinkSourcePriority("pcb_anchor"),
+      4,
+      "PCB anchors should remain a lower-priority fallback."
+    );
+    assertEqual(
+      hooks.isCommentPermalinkHref(
+        "https://www.facebook.com/groups/123456789012345/posts/9876543210123456/?comment_id=111"
+      ),
+      true,
+      "Comment permalinks should be detected."
+    );
+    assertEqual(
+      hooks.isCommentPermalinkHref(
+        "https://www.facebook.com/groups/123456789012345/posts/9876543210123456/"
+      ),
+      false,
+      "Non-comment permalinks should not be marked as comment links."
+    );
+    assertDeepEqual(
+      hooks.extractCanonicalPermalinkFromHref(
+        "https://www.facebook.com/groups/123456789012345/posts/9876543210123456/?__cft__[0]=abc",
+        "123456789012345"
+      ),
+      {
+        permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+        source: "groups_post_anchor",
+      },
+      "Direct group post permalinks should canonicalize cleanly."
+    );
+    assertDeepEqual(
+      hooks.extractCanonicalPermalinkFromHref(
+        "https://www.facebook.com/groups/123456789012345/permalink/9876543210123456/?foo=bar",
+        "123456789012345"
+      ),
+      {
+        permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+        source: "group_permalink_anchor",
+      },
+      "Group permalink routes should canonicalize to posts."
+    );
+    assertDeepEqual(
+      hooks.extractCanonicalPermalinkFromHref(
+        "https://www.facebook.com/groups/123456789012345/?set=gm.9876543210123456",
+        "123456789012345"
+      ),
+      {
+        permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+        source: "group_query_anchor",
+      },
+      "Group query routes with gm ids should canonicalize."
+    );
+    assertDeepEqual(
+      hooks.extractCanonicalPermalinkFromHref(
+        "https://www.facebook.com/permalink.php?id=123456789012345&story_fbid=9876543210123456",
+        "123456789012345"
+      ),
+      {
+        permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+        source: "permalink_php_anchor",
+      },
+      "permalink.php routes should canonicalize when group id and story id exist."
+    );
+    assertDeepEqual(
+      hooks.extractCanonicalPermalinkFromHref(
+        "https://www.facebook.com/groups/999999999999999/posts/9876543210123456",
+        "123456789012345"
+      ),
+      { permalink: "", source: "unavailable" },
+      "Expected-group mismatch should reject unrelated group permalinks."
+    );
+    assertEqual(
+      hooks.getPostContainerSourceLabel(permalinkAnchorSelector),
+      "permalink_anchor",
+      "Primary permalink selector should render as permalink_anchor."
+    );
+    assertEqual(
+      hooks.getPostContainerSourceLabel('[role="feed"] > div'),
+      "feed_child",
+      "Feed child selector should render as a short label."
+    );
+  });
+
+  runTest("post id extraction", () => {
+    assertEqual(
+      hooks.extractPostIdFromValue(
+        "https://www.facebook.com/groups/123456789012345/posts/9876543210123456/"
+      ),
+      "9876543210123456",
+      "Post id extractor should read ids from canonical permalinks."
+    );
+    assertEqual(
+      hooks.extractPostIdFromValue("photo/?fbid=1234567890&set=gm.9876543210123456"),
+      "9876543210123456",
+      "Post id extractor should prefer gm ids over photo fbid."
+    );
+    assertEqual(
+      hooks.extractMetadataPostIdFromValue('"ft_ent_identifier":"9876543210123456"'),
+      "9876543210123456",
+      "Metadata post id extractor should read ft_ent_identifier."
+    );
+  });
+
+  runTest("post keys and dedupe", () => {
+    assertEqual(
+      hooks.getPostKey({ postId: "12345" }),
+      "id:12345",
+      "postId-based key should win first."
+    );
+    assertEqual(
+      hooks.getPostKey({ permalink: "https://www.facebook.com/groups/x/posts/999/" }),
       "url:https://www.facebook.com/groups/x/posts/999/",
-    "Expected permalink-based key."
-  );
+      "Permalink-based key should be used when a post id is missing."
+    );
 
-  const compositeKey = hooks.getPostKey({
-    author: "Alice",
-    timestampText: "今天 10:30",
-    text: "搖滾區 6880 兩張",
+    const compositeKey = hooks.getPostKey({
+      author: "Alice",
+      timestampText: "today 10:30",
+      text: "Alpha ticket available",
+    });
+    assert(
+      compositeKey.startsWith("author:alice||time:today1030||text:"),
+      "Composite fallback key should use author, time, and text."
+    );
+
+    assertDeepEqual(
+      hooks.buildPostKeyFragments({
+        author: "Alice",
+        timestampText: "today 10:30",
+        text: "Alpha ticket available",
+      }),
+      {
+        compactText: "alphaticketavailable",
+        compactAuthor: "alice",
+        compactTime: "today1030",
+      },
+      "Post key fragments should normalize author/time/text independently."
+    );
+
+    assertEqual(
+      hooks.buildCompositePostKey({
+        compactAuthor: "alice",
+        compactTime: "today1030",
+        compactText: "alphaticket",
+      }),
+      "author:alice||time:today1030||text:alphaticket",
+      "Composite key builder should include author, time, and text when all exist."
+    );
+
+    const uniquePosts = hooks.collectUniquePostsByKey(
+      [
+        { postId: "1", text: "a" },
+        { postId: "1", text: "b" },
+        { postId: "2", text: "c" },
+      ],
+      10
+    );
+    assertEqual(uniquePosts.length, 2, "Unique post collection should drop duplicate keys.");
+
+    const deduped = hooks.dedupeExtractedPosts(
+      [
+        { postId: "1", text: "a" },
+        { postId: "1", text: "b" },
+        { author: "Bob", timestampText: "today", text: "same" },
+        { author: "Bob", timestampText: "today", text: "same" },
+        { postId: "2", text: "c" },
+      ],
+      10
+    );
+    assertEqual(deduped.length, 3, "Dedupe should keep only unique extracted posts.");
   });
-  assert(
-    compositeKey.startsWith("author:alice||time:"),
-    "Expected composite fallback key."
-  );
 
-  const deduped = hooks.dedupeExtractedPosts(
-    [
-      { postId: "1", text: "a" },
-      { postId: "1", text: "b" },
-      { author: "Bob", timestampText: "today", text: "same" },
-      { author: "Bob", timestampText: "today", text: "same" },
-      { postId: "2", text: "c" },
-    ],
-    10
-  );
-  assert(deduped.length === 3, "Expected three unique posts after dedupe.");
+  runTest("seen-stop helpers", () => {
+    const seenStopState = hooks.createSeenPostStopState({
+      enabled: true,
+      minNewPostsBeforeStop: 1,
+      consecutiveSeenThreshold: 3,
+    });
 
-  const trimmedSeenStore = hooks.trimSeenPostGroupStore(
-    {
-      old: "2026-04-08T09:00:00.000Z",
-      newest: "2026-04-08T11:00:00.000Z",
-      middle: "2026-04-08T10:00:00.000Z",
-    },
-    2
-  );
-  assert(
-    JSON.stringify(Object.keys(trimmedSeenStore)) === JSON.stringify(["newest", "middle"]),
-    "Expected seen-post trimming to keep the newest entries."
-  );
+    hooks.applySeenPostStopObservation(seenStopState, { postKey: "new-1", seen: false });
+    hooks.applySeenPostStopObservation(seenStopState, { postKey: "seen-1", seen: true });
+    hooks.applySeenPostStopObservation(seenStopState, { postKey: "seen-2", seen: true });
 
-  const mergedHistory = hooks.mergeMatchHistoryEntries(
-    [
-      { groupId: "g1", postKey: "keep", notifiedAt: "2026-04-08T10:00:00.000Z" },
-      { groupId: "g1", postKey: "replace", notifiedAt: "2026-04-08T09:00:00.000Z" },
-      { groupId: "g2", postKey: "other-group", notifiedAt: "2026-04-08T08:00:00.000Z" },
-    ],
-    [
-      { groupId: "g1", postKey: "replace", notifiedAt: "2026-04-08T11:00:00.000Z" },
-      { groupId: "g1", postKey: "new", notifiedAt: "2026-04-08T11:05:00.000Z" },
-    ],
-    new Set(["g1::replace", "g1::new"]),
-    10
-  );
-  assert(mergedHistory.length === 4, "Expected merged history to keep four entries.");
-  assert(
-    mergedHistory[0].postKey === "replace" && mergedHistory[1].postKey === "new",
-    "Expected incoming history entries to stay in front."
-  );
-  assert(
-    mergedHistory.some((entry) => entry.groupId === "g2" && entry.postKey === "other-group"),
-    "Expected history merge to preserve other-group entries."
-  );
-  assert(
-    mergedHistory.filter((entry) => entry.groupId === "g1" && entry.postKey === "replace").length === 1,
-    "Expected duplicate history entries to be replaced."
-  );
+    assertEqual(
+      seenStopState.triggered,
+      false,
+      "Seen-stop should remain inactive before threshold."
+    );
 
-  const seenStopState = hooks.createSeenPostStopState({
-    enabled: true,
-    minNewPostsBeforeStop: 1,
-    consecutiveSeenThreshold: 3,
+    hooks.applySeenPostStopObservation(seenStopState, { postKey: "seen-3", seen: true });
+    assertEqual(
+      seenStopState.triggered,
+      true,
+      "Seen-stop should trigger after the configured consecutive threshold."
+    );
+    assert(
+      seenStopState.stopReason.includes("3"),
+      "Seen-stop reason should mention the threshold."
+    );
+
+    const duplicateSeenStopState = hooks.createSeenPostStopState({
+      enabled: true,
+      minNewPostsBeforeStop: 1,
+      consecutiveSeenThreshold: 2,
+    });
+    hooks.applySeenPostStopObservation(duplicateSeenStopState, { postKey: "new-1", seen: false });
+    hooks.applySeenPostStopObservation(duplicateSeenStopState, { postKey: "seen-1", seen: true });
+    hooks.applySeenPostStopObservation(duplicateSeenStopState, { postKey: "seen-1", seen: true });
+    assertEqual(
+      duplicateSeenStopState.consecutiveSeenCount,
+      1,
+      "Duplicate post keys should be ignored by seen-stop observation."
+    );
   });
-  hooks.applySeenPostStopObservation(seenStopState, { postKey: "new-1", seen: false });
-  hooks.applySeenPostStopObservation(seenStopState, { postKey: "seen-1", seen: true });
-  hooks.applySeenPostStopObservation(seenStopState, { postKey: "seen-2", seen: true });
-  assert(seenStopState.triggered === false, "Expected seen-stop to remain inactive before threshold.");
-  hooks.applySeenPostStopObservation(seenStopState, { postKey: "seen-3", seen: true });
-  assert(seenStopState.triggered === true, "Expected seen-stop to trigger after three consecutive seen posts.");
-  assert(
-    seenStopState.stopReason.includes("已連續遇到 3 篇已看過貼文"),
-    "Expected seen-stop reason to mention the seen threshold."
-  );
 
-  const duplicateSeenStopState = hooks.createSeenPostStopState({
-    enabled: true,
-    minNewPostsBeforeStop: 1,
-    consecutiveSeenThreshold: 2,
-  });
-  hooks.applySeenPostStopObservation(duplicateSeenStopState, { postKey: "new-1", seen: false });
-  hooks.applySeenPostStopObservation(duplicateSeenStopState, { postKey: "seen-1", seen: true });
-  hooks.applySeenPostStopObservation(duplicateSeenStopState, { postKey: "seen-1", seen: true });
-  assert(
-    duplicateSeenStopState.consecutiveSeenCount === 1,
-    "Expected duplicate post keys to be ignored by seen-stop observation."
-  );
+  runTest("seen/history store shaping", () => {
+    const trimmedSeenStore = hooks.trimSeenPostGroupStore(
+      {
+        old: "2026-04-08T09:00:00.000Z",
+        newest: "2026-04-08T11:00:00.000Z",
+        middle: "2026-04-08T10:00:00.000Z",
+      },
+      2
+    );
+    assertDeepEqual(
+      Object.keys(trimmedSeenStore),
+      ["newest", "middle"],
+      "Seen-post trimming should keep the newest entries."
+    );
 
-  const compactBody = hooks.buildCompactNotificationBody({
-    author: "Alice",
-    includeRule: "搖滾 6880",
-    text: "搖滾 6880 兩張連號，意者私訊",
-    permalink: "https://example.com/post/1",
-  });
-  assert(compactBody.includes("測試社團"), "Expected group name in compact notification body.");
-  assert(compactBody.includes("Alice"), "Expected author in compact notification body.");
-  assert(compactBody.includes("match: 搖滾 6880"), "Expected include rule in compact body.");
+    const mergedHistory = hooks.mergeMatchHistoryEntries(
+      [
+        { groupId: "g1", postKey: "keep", notifiedAt: "2026-04-08T10:00:00.000Z" },
+        { groupId: "g1", postKey: "replace", notifiedAt: "2026-04-08T09:00:00.000Z" },
+        { groupId: "g2", postKey: "other-group", notifiedAt: "2026-04-08T08:00:00.000Z" },
+      ],
+      [
+        { groupId: "g1", postKey: "replace", notifiedAt: "2026-04-08T11:00:00.000Z" },
+        { groupId: "g1", postKey: "new", notifiedAt: "2026-04-08T11:05:00.000Z" },
+      ],
+      new Set(["g1::replace", "g1::new"]),
+      10
+    );
 
-  const remoteBody = hooks.buildRemoteNotificationBody({
-    author: "Alice",
-    includeRule: "搖滾 6880",
-    text: "搖滾 6880 兩張連號，意者私訊",
-    permalink: "https://example.com/post/1",
+    assertEqual(mergedHistory.length, 4, "Merged history should keep four entries.");
+    assertEqual(
+      mergedHistory[0].postKey,
+      "replace",
+      "Incoming entries should stay at the front."
+    );
+    assertEqual(
+      mergedHistory[1].postKey,
+      "new",
+      "Incoming entries should preserve their given order."
+    );
+    assert(
+      mergedHistory.some((entry) => entry.groupId === "g2" && entry.postKey === "other-group"),
+      "History merge should preserve other-group entries."
+    );
+    assertEqual(
+      mergedHistory.filter((entry) => entry.groupId === "g1" && entry.postKey === "replace").length,
+      1,
+      "Duplicate history keys should be replaced."
+    );
   });
-  assert(remoteBody.includes("社團: 測試社團"), "Expected group name in remote notification body.");
-  assert(remoteBody.includes("作者: Alice"), "Expected author in remote notification body.");
-  assert(remoteBody.includes("連結: https://example.com/post/1"), "Expected permalink line.");
+
+  runTest("notification formatting", () => {
+    const notificationFields = hooks.getNotificationFields({
+      author: "Alice",
+      includeRule: "alpha beta",
+      text: "Alpha beta ticket available right now.",
+      permalink: "https://example.com/post/1",
+    });
+
+    assertDeepEqual(
+      notificationFields,
+      {
+        groupName: "Test Group",
+        author: "Alice",
+        includeRule: "alpha beta",
+        text: "Alpha beta ticket available right now.",
+        permalink: "https://example.com/post/1",
+      },
+      "Notification fields should include normalized group, author, rule, text, and permalink."
+    );
+
+    assertDeepEqual(
+      hooks.buildCompactNotificationSegments(notificationFields),
+      [
+        "Test Group",
+        "Alice",
+        "match: alpha beta",
+        "Alpha beta ticket available right now.",
+      ],
+      "Compact notification segments should preserve field order."
+    );
+
+    const compactBody = hooks.buildCompactNotificationBody({
+      author: "Alice",
+      includeRule: "alpha beta",
+      text: "Alpha beta ticket available right now.",
+      permalink: "https://example.com/post/1",
+    });
+    assert(
+      compactBody.includes("Test Group") &&
+        compactBody.includes("Alice") &&
+        compactBody.includes("match: alpha beta"),
+      "Compact notification body should include group, author, and include rule."
+    );
+
+    assertDeepEqual(
+      hooks.buildRemoteNotificationLines(notificationFields),
+      [
+        "社團: Test Group",
+        "作者: Alice",
+        "關鍵字: alpha beta",
+        "內容: Alpha beta ticket available right now.",
+        "連結: https://example.com/post/1",
+      ],
+      "Remote notification lines should include the permalink when present."
+    );
+
+    const remoteBody = hooks.buildRemoteNotificationBody({
+      author: "Alice",
+      includeRule: "alpha beta",
+      text: "Alpha beta ticket available right now.",
+      permalink: "https://example.com/post/1",
+    });
+    assert(
+      remoteBody.includes("社團: Test Group") &&
+        remoteBody.includes("作者: Alice") &&
+        remoteBody.includes("連結: https://example.com/post/1"),
+      "Remote notification body should include group, author, and permalink lines."
+    );
+  });
+
+  runTest("history/debug presentation helpers", () => {
+    const highlighted = hooks.renderHighlightedHistoryContent(
+      "alpha beta ticket",
+      "alpha beta"
+    );
+    assert(
+      highlighted.includes('<span style="color:#fbbf24;">alpha</span>') &&
+        highlighted.includes('<span style="color:#fbbf24;">beta</span>'),
+      "History highlighter should wrap matched include terms."
+    );
+
+    const fieldRow = hooks.renderHistoryFieldRow("連結", '<a href="https://example.com">Open</a>');
+    assert(
+      fieldRow.includes("連結") && fieldRow.includes('href="https://example.com"'),
+      "History field row should keep the label and render the provided value HTML."
+    );
+  });
+
+  runTest("runtime state helpers", () => {
+    assertDeepEqual(
+      hooks.buildResetScanRuntimeState(),
+      {
+        latestPosts: [],
+        latestScan: null,
+        latestError: "",
+      },
+      "Reset scan runtime state should provide a stable empty shape."
+    );
+
+    assertDeepEqual(
+      hooks.buildFailedScanRuntimeState(new Error("boom")),
+      { latestError: "boom" },
+      "Failed scan runtime state should normalize the error message."
+    );
+
+    assertDeepEqual(
+      hooks.buildCompletedNotificationState(
+        { title: "t", status: "pending" },
+        ["gm_sent", "ntfy_sent"]
+      ),
+      { title: "t", status: "gm_sent, ntfy_sent" },
+      "Completed notification state should join channel status parts."
+    );
+
+    assertEqual(
+      hooks.getLatestNotificationStatusLabel({ status: "discord_sent" }),
+      "discord_sent",
+      "Latest notification status should surface the stored status."
+    );
+    assertEqual(
+      hooks.getLatestNotificationStatusLabel(null),
+      "(本次無)",
+      "Latest notification status should provide an empty fallback."
+    );
+  });
 }
 
 const hooks = loadTestHooks();

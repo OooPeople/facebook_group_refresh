@@ -161,7 +161,7 @@ Extractor 每輪只應檢查最近 N 篇貼文。
 - seen-post dedupe 只保留目前監控社團的 bucket
 - seen-post history 上限為 `目標貼文數 * 2`
 - match-history 全域保留 10 筆，並在每筆紀錄中顯示社團名稱
-- permalink 欄位仍保留在資料形狀與通知格式中，但目前實作已停用實際 permalink 抽取
+- permalink 欄位已恢復抽取；目前會優先透過群組貼文 anchor、canonical permalink 與保守 warmup 流程取得穩定連結
 - `timestampText` / `timestampEpoch` 欄位仍保留在資料形狀中，但目前不再實作貼文時間抽取
 
 ## 比對流程

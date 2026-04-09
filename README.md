@@ -42,10 +42,15 @@ facebook_group_refresh/
 └─ README.md
 ```
 
-### 各檔案用途
+### 你實際只需要的檔案
+
+如果你只是要安裝使用，實際上只需要下面這個檔案：
 
 - `src/facebook_group_refresh.user.js`
-  篡改猴腳本主程式。
+  這是唯一需要貼進 Tampermonkey 的腳本主程式。一般使用者只要這個檔案就能運行。
+
+### 其他檔案都是開發 / 測試 / 文件用途
+
 - `scripts/smoke_check_userscript.js`
   Node smoke test，用來檢查 userscript metadata 與穩定純邏輯 helper。
 - `docs/V1_SPEC.md`

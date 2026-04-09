@@ -147,6 +147,7 @@
 - `latestNotification` 已開始同時具備 runtime state 與 persistence facade，通知狀態的更新路徑更集中。
 - 單檔模組區塊整理這件事已經從「規劃中的命名整理」進展到實際可讀的分段結構，不再只是停留在假模組化命名層。
 - 穩定純邏輯也已有最小 Node 級 smoke test 可驗，後續若補更多測試案例，可以直接延伸現有基礎。
+- permalink 抽取目前已恢復為正式主路徑，並採用「permalink anchor 優先 + canonicalization + 最小 warmup」策略。
 - `STATE` 的後續收口已另立 [`docs/STATE_REFACTOR_PLAN.md`](./STATE_REFACTOR_PLAN.md)，避免把主重構盤點與 state 專題重構混在同一份文件裡。
 
 ### 2. lifecycle 與 scheduler 的入口已收斂
@@ -287,7 +288,7 @@
   - `createNotificationChannelTasks()`
   - `collectNotificationStatusParts()`
 - 非現役或 internal-only 能力已明確標示：
-  - permalink extraction: `disabled`
+  - permalink extraction: `enabled`
   - timestamp extraction: `removed`
   - browser-native notification: `removed`
 
@@ -310,8 +311,10 @@
 
 - `parseKeywordInput()`
 - `matchRules()`
+- permalink canonicalization / postId extraction
 - `getPostKey()`
 - `dedupeExtractedPosts()`
+- history merge / seen-stop helper
 - 通知文字格式化函式
 
 ## 低優先待辦

@@ -144,6 +144,7 @@
       "button",
     ],
     postContainerCandidates: [
+      'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]',
       '[role="feed"] [role="article"]',
       '[role="feed"] > div',
       'div[data-pagelet*="FeedUnit"]',
@@ -151,7 +152,7 @@
       '[aria-posinset]',
     ],
     postPermalinkAnchors:
-      'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="]',
+      'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]',
     postStoryMessage:
       'div[data-ad-comet-preview="message"], div[data-ad-preview="message"], [data-ad-rendering-role="story_message"]',
     postIdSourceNodes:
@@ -187,26 +188,26 @@
     ],
   });
   const REGEX_PATTERNS = Object.freeze({
-    postId: [
-      /\/posts\/(\d+)/i,
-      /\/permalink\/(\d+)/i,
-      /multi_permalinks=(\d+)/i,
-      /story_fbid=(\d+)/i,
-      /[?&]set=pcb\.(\d+)/i,
-      /\bpcb\.(\d+)/i,
-      /ft_ent_identifier=(\d+)/i,
+    postPermalinkId: [
+      /\/groups\/[^/?#]+\/posts\/(\d+)/i,
+      /\/groups\/[^/?#]+\/permalink\/(\d+)/i,
+      /[?&]set=gm\.(\d+)/i,
+      /\bgm\.(\d+)/i,
       /\bpost[_-]?id["'=:\s]+(\d{8,})/i,
+      /\/posts\/pcb\.(\d+)/i,
+      /\/permalink\/(\d+)/i,
+    ],
+    metadataPostId: [
       /\btop_level_post_id["'=:\s]+(\d{8,})/i,
       /\bmf_story_key["'=:\s]+(\d{8,})/i,
       /\bstoryid["'=:\s]+(\d{8,})/i,
       /\bfeedback_target_id["'=:\s]+(\d{8,})/i,
-      /\btargetfbid["'=:\s]+(\d{8,})/i,
-      /\bshare_fbid["'=:\s]+(\d{8,})/i,
-      /\bfbid["'=:\s]+(\d{8,})/i,
+      /\bft_ent_identifier["'=:\s]+(\d{8,})/i,
       /"top_level_post_id":"?(\d+)/i,
       /"mf_story_key":"?(\d+)/i,
       /"storyID":"?(\d+)/i,
-      /\/posts\/pcb\.(\d+)/i,
+      /"feedback_target_id":"?(\d+)/i,
+      /"ft_ent_identifier":"?(\d+)/i,
     ],
     cleanedTextNoise: [
       /\b[a-z0-9]{12,}\.com\b/gi,
@@ -217,9 +218,6 @@
     authorUiLabels: /^(Like|Comment|Share|Most relevant)$/i,
   });
   const ROUTE_SETTLE_MS = 3000;
-  const FEATURE_STATUS = Object.freeze({
-    permalinkExtraction: "disabled",
-  });
   const NOTIFICATION_CHANNEL_DEFINITIONS = Object.freeze([
     { id: "gmDesktop", skippedStatus: "" },
     { id: "ntfy", skippedStatus: "ntfy_skipped" },
@@ -1648,19 +1646,28 @@
     }
   }
 
+  // 在正式抽取前做最小量的 DOM 準備，保持 extractPostRecord() 同步。
+  async function preparePostContainerForExtraction(container) {
+    if (!(container instanceof HTMLElement)) return;
+
+    await expandCollapsedPostText(container);
+    await warmPermalinkAnchors(container);
+  }
+
   // 將命中的節點提升到最接近的頂層貼文容器，避免把留言當成貼文。
   function getCanonicalPostElement(node) {
     if (!(node instanceof HTMLElement)) return null;
 
-    const feed = document.querySelector('[role="feed"]');
-    if (feed instanceof HTMLElement) {
-      let current = node;
-      while (current && current instanceof HTMLElement) {
-        if (current.parentElement === feed) {
-          return current;
-        }
-        current = current.parentElement;
-      }
+    // When a real post permalink/time anchor exists, prefer the article that
+    // owns that anchor instead of the broader feed wrapper.
+    const permalinkDrivenElement = findPermalinkAnchorDrivenPostElement(node);
+    if (permalinkDrivenElement instanceof HTMLElement) {
+      return permalinkDrivenElement;
+    }
+
+    const feedChild = findFeedChildContainer(node);
+    if (feedChild instanceof HTMLElement) {
+      return feedChild;
     }
 
     // Prefer the feed child wrapper over nested articles so comment/reply
@@ -1718,6 +1725,17 @@
     return `${normalized.length}:${normalized.slice(0, 240)}`;
   }
 
+  // 將候選容器 selector 轉成較短的 debug 標籤，避免面板直接顯示整串 selector。
+  function getPostContainerSourceLabel(selector) {
+    if (selector === SELECTORS.postContainerCandidates[0]) return "permalink_anchor";
+    if (selector === '[role="feed"] [role="article"]') return "feed_article";
+    if (selector === '[role="feed"] > div') return "feed_child";
+    if (selector === 'div[data-pagelet*="FeedUnit"]') return "feed_unit";
+    if (selector === 'div[data-pagelet*="GroupsFeed"] [role="article"]') return "groups_feed_article";
+    if (selector === "[aria-posinset]") return "aria_posinset";
+    return String(selector || "(unknown)");
+  }
+
   // 從多組 selector 收集貼文候選容器，再做可見性與文字長度過濾。
   function collectPostContainers(limit = getCandidateCollectionLimit()) {
     const results = [];
@@ -1739,7 +1757,7 @@
 
         results.push({
           element: canonical,
-          source: selector,
+          source: getPostContainerSourceLabel(selector),
           top: Math.round(canonical.getBoundingClientRect().top),
           textFingerprint: buildCandidateCacheFingerprint(text),
           candidateQualityScore: candidateQuality.score,
@@ -1752,13 +1770,501 @@
     return results.slice(0, limit);
   }
 
-  // Experimental / disabled: permalink 抽取目前停用。
-  // 保留函式介面與 postId 萃取邏輯，避免之後恢復時需要改動其他主流程。
-  function extractPermalinkDetails() {
+  // Permalink / postId extraction helpers.
+  // 這段維持在 extractor 層，避免把 DOM 預熱、URL 正規化與 debug 診斷滲進 scan orchestration。
+  function buildCanonicalGroupPostUrl(groupId, postId) {
+    const normalizedGroupId = String(groupId || "").trim();
+    const normalizedPostId = String(postId || "").trim();
+    if (!normalizedGroupId || !/^\d{8,}$/.test(normalizedPostId)) return "";
+    return `https://www.facebook.com/groups/${normalizedGroupId}/posts/${normalizedPostId}`;
+  }
+
+  function normalizeFacebookUrl(value) {
+    const text = String(value || "").trim();
+    if (!text) return null;
+
+    try {
+      const url = new URL(text, location.origin);
+      if (!/^(www|m)\.facebook\.com$/i.test(url.hostname)) {
+        return null;
+      }
+      return url;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function buildPermalinkDetails(permalink = "", source = "unavailable") {
     return {
-      permalink: "",
-      source: FEATURE_STATUS.permalinkExtraction,
+      permalink: String(permalink || ""),
+      source: String(source || "unavailable"),
     };
+  }
+
+  function extractGroupRouteQueryPostId(url) {
+    if (!(url instanceof URL)) return "";
+
+    return extractFirstPatternMatch(
+      [
+        url.searchParams.get("story_fbid"),
+        url.searchParams.get("multi_permalinks"),
+        url.searchParams.get("set"),
+      ],
+      [
+        /\b(\d{8,})\b/,
+        /\bgm\.(\d+)/i,
+      ]
+    );
+  }
+
+  // Permalink URL normalization.
+  function getPermalinkSourcePriority(source = "") {
+    if (source === "groups_post_anchor") return 0;
+    if (source === "group_permalink_anchor") return 1;
+    if (source === "permalink_php_anchor") return 2;
+    if (source === "group_query_anchor") return 3;
+    if (source === "pcb_anchor") return 4;
+    return 5;
+  }
+
+  function isCommentPermalinkHref(value) {
+    const url = normalizeFacebookUrl(value);
+    if (!url) return false;
+
+    return (
+      url.searchParams.has("comment_id") ||
+      url.searchParams.has("reply_comment_id")
+    );
+  }
+
+  function extractCanonicalPermalinkFromHref(value, expectedGroupId = "") {
+    const url = normalizeFacebookUrl(value);
+    if (!url) {
+      return buildPermalinkDetails("", "");
+    }
+
+    const pathname = url.pathname.replace(/\/+$/, "");
+    const groupPostMatch = pathname.match(/^\/groups\/([^/?#]+)\/posts\/(\d+)$/i);
+    if (groupPostMatch) {
+      const [, groupId, postId] = groupPostMatch;
+      if (expectedGroupId && groupId !== expectedGroupId) {
+        return buildPermalinkDetails("", "");
+      }
+
+      return buildPermalinkDetails(
+        buildCanonicalGroupPostUrl(groupId, postId),
+        "groups_post_anchor"
+      );
+    }
+
+    const groupPermalinkMatch = pathname.match(/^\/groups\/([^/?#]+)\/permalink\/(\d+)$/i);
+    if (groupPermalinkMatch) {
+      const [, groupId, postId] = groupPermalinkMatch;
+      if (expectedGroupId && groupId !== expectedGroupId) {
+        return buildPermalinkDetails("", "");
+      }
+
+      return buildPermalinkDetails(
+        buildCanonicalGroupPostUrl(groupId, postId),
+        "group_permalink_anchor"
+      );
+    }
+
+    const pcbMatch = pathname.match(/^\/groups\/([^/?#]+)\/posts\/pcb\.(\d+)$/i);
+    if (pcbMatch) {
+      const [, groupId, postId] = pcbMatch;
+      if (expectedGroupId && groupId !== expectedGroupId) {
+        return buildPermalinkDetails("", "");
+      }
+
+      return buildPermalinkDetails(
+        buildCanonicalGroupPostUrl(groupId, postId),
+        "pcb_anchor"
+      );
+    }
+
+    const groupRouteMatch = pathname.match(/^\/groups\/([^/?#]+)(?:\/.*)?$/i);
+    if (groupRouteMatch) {
+      const [, groupId] = groupRouteMatch;
+      const postId = extractGroupRouteQueryPostId(url);
+      if (postId && (!expectedGroupId || groupId === expectedGroupId)) {
+        return buildPermalinkDetails(
+          buildCanonicalGroupPostUrl(groupId, postId),
+          "group_query_anchor"
+        );
+      }
+    }
+
+    if (!/^\/permalink\.php$/i.test(pathname)) {
+      return buildPermalinkDetails("", "");
+    }
+
+    const postId = extractGroupRouteQueryPostId(url);
+    const groupId = String(
+      url.searchParams.get("id") ||
+      url.searchParams.get("group_id") ||
+      expectedGroupId ||
+      ""
+    ).trim();
+
+    if (!groupId || !postId) {
+      return buildPermalinkDetails("", "");
+    }
+
+    if (expectedGroupId && groupId !== expectedGroupId) {
+      return buildPermalinkDetails("", "");
+    }
+
+    return buildPermalinkDetails(
+      buildCanonicalGroupPostUrl(groupId, postId),
+      "permalink_php_anchor"
+    );
+  }
+
+  function isLikelyUserProfileHref(value) {
+    const url = normalizeFacebookUrl(value);
+    if (!url) return false;
+
+    const pathname = url.pathname.replace(/\/+$/, "");
+    if (/^\/groups\/[^/?#]+\/user\/[^/?#]+$/i.test(pathname)) {
+      return true;
+    }
+    if (/^\/profile\.php$/i.test(pathname) && url.searchParams.get("id")) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function findFeedChildContainer(node) {
+    if (!(node instanceof HTMLElement)) return null;
+
+    const feed = document.querySelector('[role="feed"]');
+    if (!(feed instanceof HTMLElement)) return null;
+
+    let current = node;
+    while (current && current instanceof HTMLElement) {
+      if (current.parentElement === feed) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+
+    return null;
+  }
+
+  function collectAnchorsFromScope(scopeNode, selector = "a[href]", options = {}) {
+    if (!(scopeNode instanceof HTMLElement)) return [];
+
+    const { excludeUserProfile = false, maxItems = Number.POSITIVE_INFINITY } = options;
+    const anchors = [];
+    const seen = new Set();
+
+    const pushAnchor = (anchor) => {
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      const href = String(anchor.href || anchor.getAttribute("href") || "").trim();
+      if (!href || seen.has(href)) return;
+      if (excludeUserProfile && isLikelyUserProfileHref(href)) return;
+      seen.add(href);
+      anchors.push(anchor);
+    };
+
+    if (scopeNode instanceof HTMLAnchorElement && scopeNode.matches(selector)) {
+      pushAnchor(scopeNode);
+    }
+
+    for (const anchor of scopeNode.querySelectorAll(selector)) {
+      pushAnchor(anchor);
+      if (anchors.length >= maxItems) break;
+    }
+
+    return anchors;
+  }
+
+  function collectCanonicalPermalinkCandidates(scopeNode, expectedGroupId = "") {
+    if (!(scopeNode instanceof HTMLElement)) return [];
+
+    const candidates = [];
+    const seen = new Set();
+
+    for (const anchor of collectAnchorsFromScope(scopeNode, SELECTORS.postPermalinkAnchors)) {
+      const href = anchor.href || anchor.getAttribute("href") || "";
+      const details = extractCanonicalPermalinkFromHref(href, expectedGroupId);
+      if (!details.permalink || seen.has(details.permalink)) continue;
+
+      seen.add(details.permalink);
+      candidates.push({
+        anchor,
+        href,
+        permalink: details.permalink,
+        source: details.source,
+        isCommentLink: isCommentPermalinkHref(href),
+      });
+    }
+
+    candidates.sort((a, b) => {
+      if (a.isCommentLink !== b.isCommentLink) {
+        return a.isCommentLink ? 1 : -1;
+      }
+
+      const sourceDiff = getPermalinkSourcePriority(a.source) - getPermalinkSourcePriority(b.source);
+      if (sourceDiff !== 0) return sourceDiff;
+
+      const topDiff = Math.round(a.anchor.getBoundingClientRect().top) - Math.round(b.anchor.getBoundingClientRect().top);
+      if (topDiff !== 0) return topDiff;
+
+      return a.href.length - b.href.length;
+    });
+
+    return candidates;
+  }
+
+  // Permalink anchor warmup.
+  function isLikelyTimestampAnchorText(value) {
+    const text = normalizeText(value);
+    if (!text) return false;
+
+    return (
+      /^(?:剛剛|昨天|今天|Now)$/u.test(text) ||
+      /^\d+\s*(?:分鐘|小時|天|週|個月|月|年)\s*前$/u.test(text) ||
+      /^\d+\s*(?:m|min|h|hr|hrs|d|w|mo|y)\s*$/i.test(text) ||
+      /^\d{1,2}:\d{2}(?:\s*[AP]M)?$/i.test(text) ||
+      /^(?:\d{4}年)?\d{1,2}月\d{1,2}日(?:\s*[\d:APMapm]+)?$/u.test(text)
+    );
+  }
+
+  function isLikelyWarmupUtilityHref(value, expectedGroupId = "") {
+    const url = normalizeFacebookUrl(value);
+    if (!url) return true;
+
+    const pathname = url.pathname.replace(/\/+$/, "");
+    if (/^\/hashtag\//i.test(pathname)) return true;
+    if (/^\/groups\/[^/?#]+$/i.test(pathname) && !url.searchParams.get("story_fbid") && !url.searchParams.get("multi_permalinks") && !url.searchParams.get("set")) {
+      return true;
+    }
+    if (/^\/l\.php$/i.test(pathname)) return true;
+    if (expectedGroupId && /^\/groups\/([^/?#]+)(?:\/.*)?$/i.test(pathname)) {
+      const match = pathname.match(/^\/groups\/([^/?#]+)(?:\/.*)?$/i);
+      if (match && match[1] !== expectedGroupId) return true;
+    }
+
+    return false;
+  }
+
+  function collectPermalinkWarmupAnchors(container, expectedGroupId = getCurrentGroupId(), limit = 4) {
+    if (!(container instanceof HTMLElement)) return [];
+
+    const anchors = [];
+    const seen = new Set();
+    const containerRect = container.getBoundingClientRect();
+    const upperRegionThreshold = Math.max(180, Math.round(containerRect.height * 0.38));
+
+    for (const anchor of collectAnchorsFromScope(container, 'a[role="link"], a[href]')) {
+      if (!(anchor instanceof HTMLAnchorElement)) continue;
+      if (!isVisibleElement(anchor)) continue;
+
+      const href = String(anchor.href || anchor.getAttribute("href") || "").trim();
+      const text = normalizeText(
+        anchor.innerText ||
+        anchor.textContent ||
+        anchor.getAttribute("aria-label") ||
+        ""
+      );
+      const relativeTop = anchor.getBoundingClientRect().top - containerRect.top;
+      const canonicalDetails = extractCanonicalPermalinkFromHref(href, expectedGroupId);
+      const likelyTimestamp = isLikelyTimestampAnchorText(text);
+      const hasAttributionSrc = anchor.hasAttribute("attributionsrc");
+
+      if (relativeTop < -16 || relativeTop > upperRegionThreshold) continue;
+      if (isLikelyUserProfileHref(href)) continue;
+      if (!canonicalDetails.permalink && isLikelyWarmupUtilityHref(href, expectedGroupId) && !likelyTimestamp && !hasAttributionSrc) {
+        continue;
+      }
+
+      const signature = `${href}||${text}||${Math.round(relativeTop)}`;
+      if (seen.has(signature)) continue;
+      seen.add(signature);
+
+      anchors.push({
+        anchor,
+        href,
+        text,
+        relativeTop,
+        canonicalDetails,
+        likelyTimestamp,
+        hasAttributionSrc,
+      });
+    }
+
+    anchors.sort((a, b) => {
+      if (Boolean(a.canonicalDetails.permalink) !== Boolean(b.canonicalDetails.permalink)) {
+        return a.canonicalDetails.permalink ? -1 : 1;
+      }
+      if (a.likelyTimestamp !== b.likelyTimestamp) {
+        return a.likelyTimestamp ? -1 : 1;
+      }
+      if (a.hasAttributionSrc !== b.hasAttributionSrc) {
+        return a.hasAttributionSrc ? -1 : 1;
+      }
+
+      return Math.round(a.relativeTop) - Math.round(b.relativeTop);
+    });
+
+    return anchors.slice(0, limit);
+  }
+
+  function dispatchPermalinkWarmupEvents(anchor) {
+    if (!(anchor instanceof HTMLElement)) return;
+
+    const eventInit = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+    };
+
+    try {
+      anchor.dispatchEvent(new MouseEvent("mouseenter", eventInit));
+      anchor.dispatchEvent(new MouseEvent("mouseover", eventInit));
+      anchor.dispatchEvent(new MouseEvent("mousemove", eventInit));
+    } catch (error) {
+      // Ignore event creation failures and continue with focus fallback.
+    }
+
+    try {
+      anchor.dispatchEvent(new PointerEvent("pointerenter", eventInit));
+      anchor.dispatchEvent(new PointerEvent("pointerover", eventInit));
+    } catch (error) {
+      // PointerEvent is not always available in every userscript runtime.
+    }
+
+    try {
+      anchor.focus({ preventScroll: true });
+    } catch (error) {
+      try {
+        anchor.focus();
+      } catch (focusError) {
+        // Ignore focus failures.
+      }
+    }
+  }
+
+  async function warmPermalinkAnchors(container) {
+    if (!(container instanceof HTMLElement)) return;
+
+    const expectedGroupId = getCurrentGroupId();
+    const warmupAnchors = collectPermalinkWarmupAnchors(container, expectedGroupId);
+    if (!warmupAnchors.length) return;
+
+    for (const candidate of warmupAnchors) {
+      if (candidate.canonicalDetails.permalink) {
+        return;
+      }
+
+      dispatchPermalinkWarmupEvents(candidate.anchor);
+      await sleep(90);
+
+      const refreshedHref = candidate.anchor.href || candidate.anchor.getAttribute("href") || "";
+      const refreshedDetails = extractCanonicalPermalinkFromHref(refreshedHref, expectedGroupId);
+      if (refreshedDetails.permalink) {
+        return;
+      }
+    }
+  }
+
+  // Permalink scope resolution.
+  function findPermalinkAnchorDrivenPostElement(node, expectedGroupId = getCurrentGroupId()) {
+    if (!(node instanceof HTMLElement)) return null;
+
+    const primaryCandidate = collectCanonicalPermalinkCandidates(node, expectedGroupId)[0] || null;
+    if (!primaryCandidate?.anchor) return null;
+
+    const article = primaryCandidate.anchor.closest('[role="article"]');
+    if (article instanceof HTMLElement) {
+      return article;
+    }
+
+    return findFeedChildContainer(primaryCandidate.anchor);
+  }
+
+  function collectPermalinkSearchScopes(container) {
+    if (!(container instanceof HTMLElement)) return [];
+
+    const scopes = [];
+    const seen = new Set();
+    const addScope = (node, label, diagnosticOnly = false) => {
+      if (!(node instanceof HTMLElement)) return;
+      if (seen.has(node)) return;
+      seen.add(node);
+      scopes.push({ node, label, diagnosticOnly });
+    };
+
+    addScope(container, "container");
+
+    const permalinkDriven = findPermalinkAnchorDrivenPostElement(container);
+    if (permalinkDriven instanceof HTMLElement && permalinkDriven !== container) {
+      addScope(permalinkDriven, "permalink_focus");
+    }
+
+    let nestedArticleIndex = 0;
+    for (const article of container.querySelectorAll('[role="article"]')) {
+      if (!(article instanceof HTMLElement)) continue;
+      nestedArticleIndex += 1;
+      addScope(article, `nested_article_${nestedArticleIndex}`);
+      if (nestedArticleIndex >= 2) break;
+    }
+
+    const closestArticle = container.closest('[role="article"]');
+    if (closestArticle instanceof HTMLElement && closestArticle !== container) {
+      addScope(closestArticle, "closest_article");
+    }
+
+    const parent = container.parentElement;
+    if (parent instanceof HTMLElement) {
+      addScope(parent, "parent", true);
+    }
+
+    return scopes;
+  }
+
+  function extractPermalinkDetails(container) {
+    if (!(container instanceof HTMLElement)) {
+      return buildPermalinkDetails();
+    }
+
+    const expectedGroupId = getCurrentGroupId();
+    const scopes = collectPermalinkSearchScopes(container);
+
+    for (const scope of scopes) {
+      if (scope.diagnosticOnly) continue;
+
+      for (const candidate of collectCanonicalPermalinkCandidates(scope.node, expectedGroupId)) {
+        if (candidate.permalink) {
+          return {
+            permalink: candidate.permalink,
+            source: `${scope.label}:${candidate.source}`,
+          };
+        }
+      }
+
+      const genericAnchors = collectAnchorsFromScope(scope.node, "a[href]", {
+        excludeUserProfile: true,
+      });
+      for (const anchor of genericAnchors) {
+        const details = extractCanonicalPermalinkFromHref(
+          anchor.href || anchor.getAttribute("href") || "",
+          expectedGroupId
+        );
+        if (details.permalink) {
+          return {
+            permalink: details.permalink,
+            source: `${scope.label}:${details.source}`,
+          };
+        }
+      }
+    }
+
+    return buildPermalinkDetails();
   }
 
   // 從網址、data-ft、innerHTML 等雜訊字串裡盡量抽出穩定的 post ID。
@@ -1766,10 +2272,19 @@
     const text = String(value || "");
     if (!text) return "";
 
-    return extractFirstPatternMatch([text], REGEX_PATTERNS.postId);
+    return extractFirstPatternMatch(
+      [text],
+      [...REGEX_PATTERNS.postPermalinkId, ...REGEX_PATTERNS.metadataPostId]
+    );
   }
 
-  // 收集容器自身與子節點上的各種屬性值，提供 post ID regex 掃描。
+  function extractMetadataPostIdFromValue(value) {
+    const text = String(value || "");
+    if (!text) return "";
+
+    return extractFirstPatternMatch([text], REGEX_PATTERNS.metadataPostId);
+  }
+
   function collectPostIdSourceValues(permalink, container) {
     const values = [String(permalink || "")];
     if (!(container instanceof HTMLElement)) return values;
@@ -1779,7 +2294,6 @@
       container.getAttribute?.("data-store") || "",
       container.getAttribute?.("ajaxify") || "",
       container.getAttribute?.("id") || "",
-      container.getAttribute?.("href") || "",
       container.getAttribute?.("aria-label") || "",
       container.getAttribute?.("aria-labelledby") || "",
       container.getAttribute?.("aria-describedby") || "",
@@ -1795,11 +2309,7 @@
     const nodes = container.querySelectorAll(SELECTORS.postIdSourceNodes);
     for (const node of nodes) {
       if (!(node instanceof HTMLElement)) continue;
-      if (node instanceof HTMLAnchorElement) {
-        values.push(node.href || node.getAttribute("href") || "");
-      }
       values.push(node.id || "");
-      values.push(node.getAttribute("href") || "");
       values.push(node.getAttribute("data-ft") || "");
       values.push(node.getAttribute("data-store") || "");
       values.push(node.getAttribute("ajaxify") || "");
@@ -1817,11 +2327,14 @@
     return values;
   }
 
-  // 逐一掃描候選值，抓到第一個看起來可靠的 post ID 就返回。
+  // 逐一掃描候選值，優先信任 permalink，再退回較保守的 metadata。
   function extractPostId(permalink, container) {
+    const permalinkPostId = extractPostIdFromValue(permalink);
+    if (permalinkPostId) return permalinkPostId;
+
     const values = collectPostIdSourceValues(permalink, container);
     for (const value of values) {
-      const postId = extractPostIdFromValue(value);
+      const postId = extractMetadataPostIdFromValue(value);
       if (postId) return postId;
     }
 
@@ -2396,7 +2909,9 @@
   // 將單一候選容器轉成統一的貼文資料結構。
   function extractPostRecord(candidate) {
     const container = candidate.element;
-    const postId = extractPostId("", container);
+    const permalinkDetails = extractPermalinkDetails(container);
+    const permalink = permalinkDetails.permalink;
+    const postId = extractPostId(permalink, container);
     const textDetails = extractPostTextDetails(container);
     const text = textDetails.text;
     const author = extractAuthor(container);
@@ -2405,7 +2920,6 @@
     const timestampText = "";
     const groupId = getCurrentGroupId();
     const containerRole = container.matches('[role="article"]') ? "article" : "feed_child";
-    const permalink = "";
 
     const record = {
       postId,
@@ -2420,10 +2934,7 @@
       containerRole,
       candidateTop: candidate.top ?? Number.MAX_SAFE_INTEGER,
       candidateQualityScore: candidate.candidateQualityScore ?? 0,
-      hasPermalink: false,
-      permalinkSource: "disabled",
       textSource: textDetails.source,
-      scopeDebug: [],
       extractedAt: new Date().toISOString(),
     };
 
@@ -2453,8 +2964,9 @@
         post = cachedEntry.post;
         meta.cacheHitCount += 1;
       } else {
-        // 先嘗試展開折疊文字，再抽取完整貼文內容。
-        await expandCollapsedPostText(candidate.element);
+        // 先展開折疊文字，再對疑似時間連結做極小幅度預熱，
+        // 讓 Facebook 有機會補上單篇貼文 href。
+        await preparePostContainerForExtraction(candidate.element);
         post = extractPostRecord(candidate);
         meta.freshExtractCount += 1;
         scanCache?.set(candidate.element, {
@@ -3556,6 +4068,9 @@
       "內容",
       renderHighlightedHistoryContent(truncate(item.text, 220) || "(空白)", item.includeRule)
     );
+    const linkRow = linkHtml
+      ? renderHistoryFieldRow("連結", linkHtml)
+      : "";
 
     return `
       <div style="padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
@@ -3566,7 +4081,8 @@
         ${keywordRow}
         ${notifiedAtRow}
         ${contentRow}
-        ${linkHtml ? `<div style="margin-top:6px;">${linkHtml}</div>` : ""}
+        ${linkRow ? '<div style="height:10px;"></div>' : ""}
+        ${linkRow}
       </div>
     `;
   }
@@ -4528,6 +5044,7 @@
   function buildPanelDebugSummaryRows(viewState) {
     return [
       { label: "網址", value: viewState.currentUrlLabel },
+      { label: "社團ID", value: viewState.groupIdLabel },
       { label: "包含", value: viewState.includeKeywordsLabel },
       { label: "排除", value: viewState.excludeKeywordsLabel },
       { label: "掃描原因", value: viewState.reasonLabel },
@@ -4667,6 +5184,7 @@
     return {
       postRows: buildPanelDebugPostRowsViewState(latestPosts),
       currentUrlLabel: location.href,
+      groupIdLabel: latestScan?.groupId || getCurrentGroupId() || "(無)",
       includeKeywordsLabel: STATE.config.includeKeywords || "(空白)",
       excludeKeywordsLabel: STATE.config.excludeKeywords || "(空白)",
       ...latestScanViewState,
@@ -4999,6 +5517,7 @@
     globalThis.__FB_GROUP_REFRESH_TEST_HOOKS__ = {
       normalizeText,
       normalizeForMatch,
+      normalizeForKey,
       getMonitoringControlAction,
       getPauseToggleAction,
       getMonitoringControlLabel,
@@ -5016,11 +5535,25 @@
       getPanelPositionBounds,
       clampPanelPosition,
       buildDraggedPanelPosition,
+      clampTargetPostCount,
+      getCandidateCollectionLimit,
+      getDynamicMaxWindows,
+      getDynamicSeenPostLimit,
       parseKeywordInput,
       matchRules,
       shouldUseTopPostShortcut,
+      buildCanonicalGroupPostUrl,
+      buildPermalinkDetails,
+      extractGroupRouteQueryPostId,
+      getPermalinkSourcePriority,
+      isCommentPermalinkHref,
+      extractCanonicalPermalinkFromHref,
+      getPostContainerSourceLabel,
+      extractPostIdFromValue,
+      extractMetadataPostIdFromValue,
       createSeenPostStopState,
       applySeenPostStopObservation,
+      buildStableTextSignature,
       buildPostKeyFragments,
       buildCompositePostKey,
       getPostKey,
@@ -5033,6 +5566,9 @@
       buildCompactNotificationBody,
       buildRemoteNotificationLines,
       buildRemoteNotificationBody,
+      renderHighlightedHistoryContent,
+      renderHistoryFieldRow,
+      buildResetScanRuntimeState,
       buildFailedScanRuntimeState,
       buildCompletedNotificationState,
       getLatestNotificationStatusLabel,

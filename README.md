@@ -13,6 +13,7 @@
 - 支援開始 / 暫停監控
 - 支援拖曳主面板，並記住上次位置
 - 支援查看符合關鍵字通知紀錄，並可清空全部通知紀錄
+- 支援在通知紀錄中開啟已成功抽取的貼文連結
 - 支援浮動刷新與固定刷新秒數設定
 - 支援自動載入更多貼文
 - 支援設定單次最多累積掃描的唯一貼文數
@@ -46,7 +47,7 @@ facebook_group_refresh/
 - `src/facebook_group_refresh.user.js`
   篡改猴腳本主程式。
 - `scripts/smoke_check_userscript.js`
-  最小 smoke test，用來檢查 userscript metadata 與穩定純邏輯。
+  Node smoke test，用來檢查 userscript metadata 與穩定純邏輯 helper。
 - `docs/V1_SPEC.md`
   功能規格與設計方向。
 - `docs/REFACTOR_PLAN.md`
@@ -247,7 +248,7 @@ https://www.facebook.com/groups/<group-id>/
 
 - Facebook DOM 結構可能變動，造成選擇器失效
 - 某些貼文類型可能抓不到穩定的 `postId`
-- 目前不提供貼文連結
+- 某些外站分享或特殊貼文型態可能仍抓不到穩定 permalink，因此通知紀錄不一定都有可開啟的貼文連結
 - 目前版本暫時停用貼文時間解析，避免把留言時間誤判成貼文時間
 - 當 Facebook 頁面被最小化、切到背景，或被其他視窗長時間覆蓋時，瀏覽器可能節流頁內 timer，導致刷新與自動捲動不一定可靠
 - 此腳本依賴你已登入 Facebook，且畫面能正常載入社團內容
@@ -271,7 +272,7 @@ https://www.facebook.com/groups/<group-id>/
 
 ## 開發驗證
 
-目前 repo 已提供最小 smoke test。
+目前 repo 已提供 Node smoke test。
 
 若本機已安裝 Node.js，可執行：
 
@@ -279,11 +280,22 @@ https://www.facebook.com/groups/<group-id>/
 node .\scripts\smoke_check_userscript.js
 ```
 
-目前 smoke test 已涵蓋 userscript metadata、keyword matcher / dedupe / notification formatting、`開始 / 暫停` 的 restart 語義、top-post shortcut eligibility、refresh payload builder、panel drag position helper，以及 scan / notification runtime 的純邏輯 helper。
+目前 smoke test 已涵蓋：
+
+- userscript metadata 與 test mode 載入
+- text normalization / keyword matcher
+- config normalization 與 refresh payload builder
+- permalink canonicalization / postId extraction
+- dedupe / seen-stop / history merge
+- notification formatting
+- `開始 / 暫停` 的 restart 語義
+- top-post shortcut eligibility
+- panel drag / position helper
+- scan / notification runtime 的純邏輯 helper
 
 這個檢查主要會驗證：
 
 - userscript metadata 是否存在
 - 腳本是否可在 test mode 下載入
 - 關鍵字解析 / 比對
-- 去重 key 與通知文字格式化等穩定純邏輯
+- permalink、去重 key、通知文字、history merge 等穩定純邏輯

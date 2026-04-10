@@ -1,25 +1,74 @@
 # Facebook Group Refresh Monitor
 
-一個使用於 Facebook 社團頁面的篡改猴腳本，用來監看最新貼文、比對包含與排除關鍵字，並在找到符合條件的新貼文時發送通知。
+用於 Facebook 社團頁面的 Tampermonkey userscript。
 
-這個專案的目標不是大量爬文，而是提供一個偏保守、可手動調整、適合日常盯票或盯關鍵字貼文的瀏覽器端工具。除了電腦桌面通知外，也支援 `ntfy` 與 Discord Webhook 通知，方便人在外面時由手機或 Discord 頻道同步接收提醒。
+它的目標很單純：在你已登入 Facebook 的瀏覽器裡，保守地監看目前社團的新貼文，套用包含 / 排除關鍵字規則，並在找到符合條件的新貼文時送出通知。
 
-## 功能特色
+這個專案刻意不走大量爬取或背景服務，而是優先使用瀏覽器內 userscript、既有登入 session，以及可診斷的本地 debug 面板。
 
-- 支援 Facebook 社團頁面監看
+## 功能概要
+
+- 監看 `https://www.facebook.com/groups/*` 頁面
 - 支援包含關鍵字與排除關鍵字
-- 支援 `;` 作為 OR、空格作為 AND 的規則寫法
-- 支援關鍵字規則說明彈窗
-- 支援開始 / 暫停監控
-- 支援拖曳主面板，並記住上次位置
-- 支援查看符合關鍵字通知紀錄，並可清空全部通知紀錄
-- 支援在通知紀錄中開啟已成功抽取的貼文連結
-- 支援浮動刷新與固定刷新秒數設定
-- 支援自動載入更多貼文
-- 支援設定單次最多累積掃描的唯一貼文數
-- 支援電腦桌面通知
-- 支援 `ntfy` 推播通知
-- 支援 Discord Webhook 通知
+- 支援 `;` 作為 OR、空格作為 AND
+- 支援桌面通知
+- 支援 opt-in 的 `ntfy` 與 Discord Webhook 通知
+- 支援保守 refresh 與自動載入更多貼文
+- 支援貼文去重、通知紀錄與 debug 面板
+
+## 快速開始
+
+### 1. 安裝 Tampermonkey
+
+先在瀏覽器安裝 [Tampermonkey](https://chromewebstore.google.com/detail/dhdgffkkebhmkfjojejmpbldmpobfkfo?utm_source=item-share-cb)。
+
+安裝後，建議把它釘選到瀏覽器工具列，之後比較容易確認腳本是否啟用。
+
+### 2. 建立 userscript
+
+1. 點開瀏覽器右上角的 Tampermonkey
+2. 進入 `控制台`
+3. 建立新的腳本
+4. 清掉預設內容
+5. 將 [`src/facebook_group_refresh.user.js`](./src/facebook_group_refresh.user.js) 全文貼上
+6. 儲存腳本
+
+### 3. 進入 Facebook 社團頁
+
+此腳本只會在下列網址格式啟用：
+
+```text
+https://www.facebook.com/groups/<group-id>/
+```
+
+進入社團頁後，建議手動重新整理一次，讓腳本完整初始化。
+
+如果正常啟用，右上角會出現控制面板。
+
+### 4. 開始使用
+
+1. 輸入包含關鍵字與排除關鍵字
+2. 按 `儲存`
+3. 按 `開始`
+
+如果你想看完整操作與通知設定，請再讀：
+
+- [`docs/USAGE.md`](./docs/USAGE.md)
+
+## 詳細使用說明
+
+README 只保留快速導覽。完整操作請看：
+
+- [`docs/USAGE.md`](./docs/USAGE.md)
+
+內容包含：
+
+- 主面板按鈕與設定說明
+- 關鍵字規則與範例
+- `ntfy` 設定步驟
+- Discord Webhook 設定步驟
+- 通知與去重邏輯
+- 常見不通知原因與使用注意事項
 
 ## 專案結構
 
@@ -30,6 +79,7 @@ facebook_group_refresh/
 ├─ scripts/
 │  └─ smoke_check_userscript.js
 ├─ docs/
+│  ├─ USAGE.md
 │  ├─ V1_SPEC.md
 │  ├─ REFACTOR_PLAN.md
 │  ├─ STATE_REFACTOR_PLAN.md
@@ -46,240 +96,50 @@ facebook_group_refresh/
 
 如果你只是要安裝使用，實際上只需要下面這個檔案：
 
-- `src/facebook_group_refresh.user.js`
+- [`src/facebook_group_refresh.user.js`](./src/facebook_group_refresh.user.js)
   這是唯一需要貼進 Tampermonkey 的腳本主程式。一般使用者只要這個檔案就能運行。
 
 ### 其他檔案都是開發 / 測試 / 文件用途
 
-- `scripts/smoke_check_userscript.js`
+- [`scripts/smoke_check_userscript.js`](./scripts/smoke_check_userscript.js)
   Node smoke test，用來檢查 userscript metadata 與穩定純邏輯 helper。
-- `docs/V1_SPEC.md`
+- [`docs/V1_SPEC.md`](./docs/V1_SPEC.md)
   功能規格與設計方向。
-- `docs/REFACTOR_PLAN.md`
+- [`docs/REFACTOR_PLAN.md`](./docs/REFACTOR_PLAN.md)
   重構盤點、完成項目與後續原則。
-- `docs/STATE_REFACTOR_PLAN.md`
+- [`docs/STATE_REFACTOR_PLAN.md`](./docs/STATE_REFACTOR_PLAN.md)
   `STATE` 專題重構計畫，記錄 runtime 分區、mutation 入口與五輪重構步驟。
-- `docs/SCRIPT_TEMPLATE_GUIDE.md`
+- [`docs/SCRIPT_TEMPLATE_GUIDE.md`](./docs/SCRIPT_TEMPLATE_GUIDE.md)
   說明如何把這份腳本作為其他單站監視腳本模板。
-- `docs/TASK_BREAKDOWN.md`
+- [`docs/TASK_BREAKDOWN.md`](./docs/TASK_BREAKDOWN.md)
   任務拆解與目前完成狀態。
-- `AGENTS.md`
+- [`AGENTS.md`](./AGENTS.md)
   這個 repo 的 agent / AI 協作規則。
-- `GIT_COMMIT_RULES.md`
+- [`GIT_COMMIT_RULES.md`](./GIT_COMMIT_RULES.md)
   Git commit message 規範。
-- `.editorconfig`
+- [`.editorconfig`](./.editorconfig)
   編輯器格式設定。
-- `.gitignore`
+- [`.gitignore`](./.gitignore)
   Git 忽略規則。
 
-## 安裝方式
-
-### 1. 安裝 [篡改猴（Tampermonkey）](https://chromewebstore.google.com/detail/dhdgffkkebhmkfjojejmpbldmpobfkfo?utm_source=item-share-cb)
-
-先在瀏覽器安裝篡改猴擴充功能，安裝後建議把它釘選在瀏覽器右上角，之後會比較方便開啟控制台與確認腳本是否啟用。
-
-### 2. 安裝腳本
-
-1. 從瀏覽器右上角的擴充功能區點擊 篡改猴，開啟選單後進入 `控制台`。
-2. 建立一個新的腳本。
-3. 將 [`src/facebook_group_refresh.user.js`](./src/facebook_group_refresh.user.js) 的內容完整貼上。
-4. 儲存腳本。
-
-### 3. 前往 Facebook 社團頁
-
-此腳本只會在符合下列網址格式的頁面啟用：
-
-```text
-https://www.facebook.com/groups/<group-id>/
-```
-
-進入 Facebook 社團頁後，請手動重新整理一次，腳本面板才會出現。若你是從 Facebook 首頁直接點進社團，有時不會被視為完整重新載入。
-
-如果重新整理後還是沒看到面板，可以檢查瀏覽器右上角的 篡改猴 是否有啟用這支腳本。
-
-## 使用方式
-
-### 主面板
-
-腳本啟動後，頁面右上角會出現控制面板，主要功能如下：
-
-- `包含關鍵字`
-  設定要通知的關鍵字規則。
-- `?`
-  顯示包含 / 排除關鍵字的輸入規則與範例。
-- `排除關鍵字`
-  設定不要通知的關鍵字規則。
-- `儲存`
-  儲存包含與排除關鍵字。在監控中按下後會依新規則重新掃描。
-- `開始 / 暫停`
-  切換監控狀態。從暫停切回開始時，按鈕語義屬於「重新開始目前社團監控」，會清除目前社團的已看過貼文記錄並立即重新掃描，而不是單純沿用舊基準恢復排程。
-- `主面板拖曳`
-  可拖曳右上角主面板標題列，並在重新整理後保留上次位置。
-- `查看紀錄`
-  查看最近符合關鍵字且已通知的全域紀錄，也可以清空全部通知紀錄。
-- `設定`
-  調整刷新秒數、自動載入更多貼文、單次掃描上限、`ntfy topic` 與 Discord Webhook URL。
-- `除錯`
-  開啟或關閉除錯資訊面板。
-
-### 關鍵字規則
-
-包含關鍵字與排除關鍵字都使用相同規則：
-
-- `;` 表示 OR
-- 空格表示 AND
-
-示例 1：
-
-```text
-搖滾;6880;5880
-```
-
-只要出現 `搖滾` 或 `6880` 或 `5880` 就通知。
-
-示例 2：
-
-```text
-搖滾 6880;搖滾 5880
-```
-
-代表 `搖滾` 且 `6880`，或 `搖滾` 且 `5880` 才通知。
-
-排除關鍵字也使用同樣規則。
-
-### 預設關鍵字
-
-第一次安裝、且尚未有任何已儲存設定時，腳本會預設填入：
-
-- `包含關鍵字`: `4/4 熱區; 4/4 109; 4/4 117`
-- `排除關鍵字`: `徵`
-
-預設狀態為 `已暫停`。你需要手動按下 `開始` 才會進入監控。
-
-目前 `seenPosts` 的去重基準只保留「當前社團」資料；切換到其他社團後，腳本會以該社團自己的狀態重新建立去重基準，而不保留多社團的長期 seen bucket。
-
-## 設定說明
-
-### 啟用浮動刷新
-
-開啟後，腳本會在你設定的最小與最大秒數之間，隨機挑一個時間刷新。
-
-範例：
-
-- 最小刷新秒數：`25`
-- 最大刷新秒數：`35`
-
-代表每次刷新會落在 25 到 35 秒之間。
-
-### 固定刷新秒數
-
-當 `啟用浮動刷新` 關閉時，改用固定秒數刷新。
-
-### 自動載入更多貼文
-
-開啟後，腳本會在單次掃描中以保守捲動方式往下多抓幾個視窗的貼文，再做去重與比對。
-
-### 每次最多掃描貼文數
-
-這個數字代表單次掃描的目標貼文數。腳本會盡量湊滿你設定的篇數，只有在跑到安全掃描上限後仍不足時，才會少於目標值。預設為 `5`，目前最多可設到 `10`。
-
-### ntfy topic
-
-若有填寫 `ntfy topic`，符合條件的通知會同步送到 `ntfy`。
-
-### Discord Webhook URL
-
-若有填寫 Discord Webhook URL，符合條件的通知會同步送到指定的 Discord 頻道。留空則不傳送 Discord 通知。
-
-### 測試通知
-
-會送出一則測試通知，方便確認電腦桌面通知、`ntfy` 與 Discord Webhook 是否正常。測試通知不會寫入貼文去重資料。
-
-## 通知方式
-
-### 電腦桌面通知
-
-即使沒有設定 `ntfy`，腳本仍會透過桌面通知在電腦上提醒你。
-
-### [ntfy](https://ntfy.sh/) 通知
-
-如果你希望出門在外時，手機也能同步收到提醒，可以額外設定 `ntfy`。
-
-### ntfy 設定步驟
-
-1. 在手機上安裝 `ntfy` App。
-2. 在 App 內右上角按 `+`，輸入你要使用的 topic，例如 `my-facebook-alerts`。
-3. 注意：某些特殊符號可能不適用，建議使用英文字母、數字、減號或底線。
-4. 回到電腦上的 Facebook 頁面，在腳本面板中按 `設定`。
-5. 在 `ntfy topic` 欄位輸入完全相同的 topic。
-6. 按一次 `測試通知`，確認手機 App 是否有收到通知；通知可能會有些許延遲。
-
-註：如果你另外修改了刷新秒數、掃描貼文數等其他設定，再按 `儲存設定`。
-
-### 什麼情況下不會送出 ntfy
-
-- `ntfy topic` 是空白
-- `ntfy topic` 被清空後已重新儲存
-- 網路異常，或 `ntfy` 服務暫時沒有成功接收通知
-
-### Discord Webhook 通知
-
-如果你希望通知直接送到 Discord 頻道，也可以另外設定 Discord Webhook。
-
-### Discord Webhook 設定步驟
-
-1. 在 Discord 選擇目標頻道，進入 `編輯頻道`。
-2. 點選 `整合` → `Webhooks` → `新 Webhook`。
-3. 複製 Webhook URL。
-4. 回到電腦上的 Facebook 頁面，在腳本面板中按 `設定`。
-5. 在 `Discord Webhook URL` 欄位貼上剛剛複製的網址。
-6. 按一次 `測試通知`，確認 Discord 頻道是否有收到通知；通知可能會有些許延遲。
-
-### 什麼情況下不會送出 Discord Webhook
-
-- `Discord Webhook URL` 是空白
-- `Discord Webhook URL` 被清空後已重新儲存
-- Webhook URL 已失效、沒有權限，或 Discord 服務暫時沒有成功接收通知
-
-## 去重與通知邏輯
-
-為了避免同一篇貼文重複通知，腳本會優先用貼文本身的識別資訊判斷；如果抓不到穩定的 `postId`，就改用作者、內容與其他 fallback 資訊做比對。
-
-簡單來說，系統會盡量判斷「這是不是剛剛看過的同一篇貼文」，避免重複提醒你。
-
-已看過的貼文去重資料只保留目前正在監控的社團，並保留最近「目標貼文數 * 2」筆。符合關鍵字的通知紀錄則以全域清單方式保留最近 10 筆，並顯示各筆紀錄所屬的社團。
-
-## 已知限制
-
-- Facebook DOM 結構可能變動，造成選擇器失效
-- 某些貼文類型可能抓不到穩定的 `postId`
-- 某些外站分享或特殊貼文型態可能仍抓不到穩定 permalink，因此通知紀錄不一定都有可開啟的貼文連結
-- 目前版本暫時停用貼文時間解析，避免把留言時間誤判成貼文時間
-- 當 Facebook 頁面被最小化、切到背景，或被其他視窗長時間覆蓋時，瀏覽器可能節流頁內 timer，導致刷新與自動捲動不一定可靠
-- 此腳本依賴你已登入 Facebook，且畫面能正常載入社團內容
-- 無法保證所有語系、所有社團版型都完全一致
+## 目前行為與限制
+
+- 只支援已登入 Facebook 的瀏覽器環境
+- 只在 `www.facebook.com/groups/*` 啟用
+- 以保守 refresh、溫和捲動與最小頁面互動為原則
+- 不處理登入、自動留言、按讚、發文、加入社團或任何互動
+- Facebook DOM 與貼文型態會變動，少數貼文可能仍抓不到穩定 permalink 或 `postId`
+- `timestampText` / `timestampEpoch` 目前保留欄位形狀，但暫不做貼文時間解析
 
 ## 隱私與安全
 
-- 腳本在瀏覽器本地執行，不會把 Facebook 帳號資訊上傳到本專案
-- 關鍵字、設定與通知紀錄保存在本機
-- 若有設定 `ntfy` 或 Discord Webhook，通知內容會送到你指定的外部通知服務
-
-## 開發文件
-
-如果你想了解目前功能規格與任務拆解，可以參考：
-
-- [`docs/V1_SPEC.md`](./docs/V1_SPEC.md)
-- [`docs/REFACTOR_PLAN.md`](./docs/REFACTOR_PLAN.md)
-- [`docs/STATE_REFACTOR_PLAN.md`](./docs/STATE_REFACTOR_PLAN.md)
-- [`docs/SCRIPT_TEMPLATE_GUIDE.md`](./docs/SCRIPT_TEMPLATE_GUIDE.md)
-- [`docs/TASK_BREAKDOWN.md`](./docs/TASK_BREAKDOWN.md)
+- 腳本在本地瀏覽器執行
+- 關鍵字、設定、去重資料與通知紀錄保存在本機
+- 若有啟用 `ntfy` 或 Discord Webhook，通知內容只會送往你自行設定的端點
 
 ## 開發驗證
 
-目前 repo 已提供 Node smoke test。
-
-若本機已安裝 Node.js，可執行：
+repo 內提供最小 smoke test：
 
 ```powershell
 node .\scripts\smoke_check_userscript.js
@@ -293,14 +153,15 @@ node .\scripts\smoke_check_userscript.js
 - permalink canonicalization / postId extraction
 - dedupe / seen-stop / history merge
 - notification formatting
-- `開始 / 暫停` 的 restart 語義
 - top-post shortcut eligibility
 - panel drag / position helper
 - scan / notification runtime 的純邏輯 helper
 
-這個檢查主要會驗證：
+## 相關文件
 
-- userscript metadata 是否存在
-- 腳本是否可在 test mode 下載入
-- 關鍵字解析 / 比對
-- permalink、去重 key、通知文字、history merge 等穩定純邏輯
+- [`docs/USAGE.md`](./docs/USAGE.md)
+- [`docs/V1_SPEC.md`](./docs/V1_SPEC.md)
+- [`docs/REFACTOR_PLAN.md`](./docs/REFACTOR_PLAN.md)
+- [`docs/STATE_REFACTOR_PLAN.md`](./docs/STATE_REFACTOR_PLAN.md)
+- [`docs/SCRIPT_TEMPLATE_GUIDE.md`](./docs/SCRIPT_TEMPLATE_GUIDE.md)
+- [`docs/TASK_BREAKDOWN.md`](./docs/TASK_BREAKDOWN.md)

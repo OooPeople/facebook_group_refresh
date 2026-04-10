@@ -107,6 +107,7 @@
     minCandidateTextLength: 8,
     candidateMultiplier: 6,
     seenPostMultiplier: 2,
+    seenPostAliasMultiplier: 6,
     maxWindowMultiplier: 2,
     minNewPostsBeforeSeenStop: 1,
     consecutiveSeenStopCount: 3,
@@ -973,7 +974,11 @@
 
   // 已看過貼文的去重保留數量跟著目標貼文數動態調整，目前採用目標篇數 * 2。
   function getDynamicSeenPostLimit(targetCount = STATE.config.maxPostsPerScan) {
-    return clampTargetPostCount(targetCount) * SCAN_LIMITS.seenPostMultiplier;
+    return (
+      clampTargetPostCount(targetCount) *
+      SCAN_LIMITS.seenPostMultiplier *
+      SCAN_LIMITS.seenPostAliasMultiplier
+    );
   }
 
   // UI 文字輸出前做最基本的 HTML escape，避免 debug / history 面板插入未轉義內容。
@@ -1648,10 +1653,12 @@
 
   // 在正式抽取前做最小量的 DOM 準備，保持 extractPostRecord() 同步。
   async function preparePostContainerForExtraction(container) {
-    if (!(container instanceof HTMLElement)) return;
+    if (!(container instanceof HTMLElement)) {
+      return buildPermalinkWarmupState();
+    }
 
     await expandCollapsedPostText(container);
-    await warmPermalinkAnchors(container);
+    return warmPermalinkAnchors(container);
   }
 
   // 將命中的節點提升到最接近的頂層貼文容器，避免把留言當成貼文。
@@ -1801,6 +1808,20 @@
     };
   }
 
+  function buildGroupScopedPermalinkDetails(groupId, postId, source, expectedGroupId = "") {
+    const normalizedGroupId = String(groupId || "").trim();
+    const normalizedPostId = String(postId || "").trim();
+    if (!normalizedGroupId || !normalizedPostId) {
+      return buildPermalinkDetails("", "");
+    }
+    if (expectedGroupId && normalizedGroupId !== expectedGroupId) {
+      return buildPermalinkDetails("", "");
+    }
+
+    const permalink = buildCanonicalGroupPostUrl(normalizedGroupId, normalizedPostId);
+    return permalink ? buildPermalinkDetails(permalink, source) : buildPermalinkDetails("", "");
+  }
+
   function extractGroupRouteQueryPostId(url) {
     if (!(url instanceof URL)) return "";
 
@@ -1814,6 +1835,41 @@
         /\b(\d{8,})\b/,
         /\bgm\.(\d+)/i,
       ]
+    );
+  }
+
+  function extractPhotoRouteGroupId(url, expectedGroupId = "") {
+    if (!(url instanceof URL)) return "";
+
+    const groupId = String(
+      url.searchParams.get("idorvanity") ||
+      url.searchParams.get("group") ||
+      url.searchParams.get("group_id") ||
+      url.searchParams.get("id") ||
+      expectedGroupId ||
+      ""
+    ).trim();
+
+    if (!groupId) {
+      return "";
+    }
+    if (expectedGroupId && groupId !== expectedGroupId) {
+      return "";
+    }
+
+    return groupId;
+  }
+
+  function extractPhotoRoutePermalinkDetails(url, expectedGroupId = "") {
+    if (!(url instanceof URL)) {
+      return buildPermalinkDetails("", "");
+    }
+
+    return buildGroupScopedPermalinkDetails(
+      extractPhotoRouteGroupId(url, expectedGroupId),
+      extractGroupRouteQueryPostId(url),
+      "photo_gm_anchor",
+      expectedGroupId
     );
   }
 
@@ -1847,77 +1903,61 @@
     const groupPostMatch = pathname.match(/^\/groups\/([^/?#]+)\/posts\/(\d+)$/i);
     if (groupPostMatch) {
       const [, groupId, postId] = groupPostMatch;
-      if (expectedGroupId && groupId !== expectedGroupId) {
-        return buildPermalinkDetails("", "");
-      }
-
-      return buildPermalinkDetails(
-        buildCanonicalGroupPostUrl(groupId, postId),
-        "groups_post_anchor"
+      return buildGroupScopedPermalinkDetails(
+        groupId,
+        postId,
+        "groups_post_anchor",
+        expectedGroupId
       );
     }
 
     const groupPermalinkMatch = pathname.match(/^\/groups\/([^/?#]+)\/permalink\/(\d+)$/i);
     if (groupPermalinkMatch) {
       const [, groupId, postId] = groupPermalinkMatch;
-      if (expectedGroupId && groupId !== expectedGroupId) {
-        return buildPermalinkDetails("", "");
-      }
-
-      return buildPermalinkDetails(
-        buildCanonicalGroupPostUrl(groupId, postId),
-        "group_permalink_anchor"
+      return buildGroupScopedPermalinkDetails(
+        groupId,
+        postId,
+        "group_permalink_anchor",
+        expectedGroupId
       );
     }
 
     const pcbMatch = pathname.match(/^\/groups\/([^/?#]+)\/posts\/pcb\.(\d+)$/i);
     if (pcbMatch) {
       const [, groupId, postId] = pcbMatch;
-      if (expectedGroupId && groupId !== expectedGroupId) {
-        return buildPermalinkDetails("", "");
-      }
-
-      return buildPermalinkDetails(
-        buildCanonicalGroupPostUrl(groupId, postId),
-        "pcb_anchor"
+      return buildGroupScopedPermalinkDetails(
+        groupId,
+        postId,
+        "pcb_anchor",
+        expectedGroupId
       );
+    }
+
+    if (/^\/photo(?:\.php)?$/i.test(pathname)) {
+      return extractPhotoRoutePermalinkDetails(url, expectedGroupId);
     }
 
     const groupRouteMatch = pathname.match(/^\/groups\/([^/?#]+)(?:\/.*)?$/i);
     if (groupRouteMatch) {
       const [, groupId] = groupRouteMatch;
       const postId = extractGroupRouteQueryPostId(url);
-      if (postId && (!expectedGroupId || groupId === expectedGroupId)) {
-        return buildPermalinkDetails(
-          buildCanonicalGroupPostUrl(groupId, postId),
-          "group_query_anchor"
-        );
-      }
+      return buildGroupScopedPermalinkDetails(groupId, postId, "group_query_anchor", expectedGroupId);
     }
 
     if (!/^\/permalink\.php$/i.test(pathname)) {
       return buildPermalinkDetails("", "");
     }
 
-    const postId = extractGroupRouteQueryPostId(url);
-    const groupId = String(
+    return buildGroupScopedPermalinkDetails(
+      String(
       url.searchParams.get("id") ||
       url.searchParams.get("group_id") ||
       expectedGroupId ||
       ""
-    ).trim();
-
-    if (!groupId || !postId) {
-      return buildPermalinkDetails("", "");
-    }
-
-    if (expectedGroupId && groupId !== expectedGroupId) {
-      return buildPermalinkDetails("", "");
-    }
-
-    return buildPermalinkDetails(
-      buildCanonicalGroupPostUrl(groupId, postId),
-      "permalink_php_anchor"
+      ).trim(),
+      extractGroupRouteQueryPostId(url),
+      "permalink_php_anchor",
+      expectedGroupId
     );
   }
 
@@ -2149,27 +2189,60 @@
     }
   }
 
+  function buildPermalinkWarmupState({
+    warmupAttempted = false,
+    warmupResolved = false,
+    warmupCandidateCount = 0,
+  } = {}) {
+    return {
+      warmupAttempted: Boolean(warmupAttempted),
+      warmupResolved: Boolean(warmupResolved),
+      warmupCandidateCount: Number(warmupCandidateCount) || 0,
+    };
+  }
+
   async function warmPermalinkAnchors(container) {
-    if (!(container instanceof HTMLElement)) return;
+    if (!(container instanceof HTMLElement)) {
+      return buildPermalinkWarmupState();
+    }
 
     const expectedGroupId = getCurrentGroupId();
     const warmupAnchors = collectPermalinkWarmupAnchors(container, expectedGroupId);
-    if (!warmupAnchors.length) return;
+    if (!warmupAnchors.length) {
+      return buildPermalinkWarmupState();
+    }
+
+    let warmupAttempted = false;
 
     for (const candidate of warmupAnchors) {
       if (candidate.canonicalDetails.permalink) {
-        return;
+        return buildPermalinkWarmupState({
+          warmupAttempted,
+          warmupResolved: true,
+          warmupCandidateCount: warmupAnchors.length,
+        });
       }
 
+      warmupAttempted = true;
       dispatchPermalinkWarmupEvents(candidate.anchor);
       await sleep(90);
 
       const refreshedHref = candidate.anchor.href || candidate.anchor.getAttribute("href") || "";
       const refreshedDetails = extractCanonicalPermalinkFromHref(refreshedHref, expectedGroupId);
       if (refreshedDetails.permalink) {
-        return;
+        return buildPermalinkWarmupState({
+          warmupAttempted,
+          warmupResolved: true,
+          warmupCandidateCount: warmupAnchors.length,
+        });
       }
     }
+
+    return buildPermalinkWarmupState({
+      warmupAttempted,
+      warmupResolved: false,
+      warmupCandidateCount: warmupAnchors.length,
+    });
   }
 
   // Permalink scope resolution.
@@ -2229,20 +2302,27 @@
 
   function extractPermalinkDetails(container) {
     if (!(container instanceof HTMLElement)) {
-      return buildPermalinkDetails();
+      return {
+        ...buildPermalinkDetails(),
+        canonicalCandidateCount: 0,
+      };
     }
 
     const expectedGroupId = getCurrentGroupId();
     const scopes = collectPermalinkSearchScopes(container);
+    let canonicalCandidateCount = 0;
 
     for (const scope of scopes) {
       if (scope.diagnosticOnly) continue;
 
-      for (const candidate of collectCanonicalPermalinkCandidates(scope.node, expectedGroupId)) {
+      const canonicalCandidates = collectCanonicalPermalinkCandidates(scope.node, expectedGroupId);
+      canonicalCandidateCount += canonicalCandidates.length;
+      for (const candidate of canonicalCandidates) {
         if (candidate.permalink) {
           return {
             permalink: candidate.permalink,
             source: `${scope.label}:${candidate.source}`,
+            canonicalCandidateCount,
           };
         }
       }
@@ -2259,12 +2339,16 @@
           return {
             permalink: details.permalink,
             source: `${scope.label}:${details.source}`,
+            canonicalCandidateCount,
           };
         }
       }
     }
 
-    return buildPermalinkDetails();
+    return {
+      ...buildPermalinkDetails(),
+      canonicalCandidateCount,
+    };
   }
 
   // 從網址、data-ft、innerHTML 等雜訊字串裡盡量抽出穩定的 post ID。
@@ -2290,6 +2374,7 @@
     if (!(container instanceof HTMLElement)) return values;
 
     values.push(
+      container.getAttribute?.("href") || "",
       container.getAttribute?.("data-ft") || "",
       container.getAttribute?.("data-store") || "",
       container.getAttribute?.("ajaxify") || "",
@@ -2309,6 +2394,10 @@
     const nodes = container.querySelectorAll(SELECTORS.postIdSourceNodes);
     for (const node of nodes) {
       if (!(node instanceof HTMLElement)) continue;
+      values.push(node.getAttribute("href") || "");
+      if (node instanceof HTMLAnchorElement) {
+        values.push(node.href || "");
+      }
       values.push(node.id || "");
       values.push(node.getAttribute("data-ft") || "");
       values.push(node.getAttribute("data-store") || "");
@@ -2327,18 +2416,31 @@
     return values;
   }
 
-  // 逐一掃描候選值，優先信任 permalink，再退回較保守的 metadata。
+  // 逐一掃描候選值，優先信任 permalink，再退回 metadata 與 href 等 fallback 線索。
   function extractPostId(permalink, container) {
     const permalinkPostId = extractPostIdFromValue(permalink);
-    if (permalinkPostId) return permalinkPostId;
+    if (permalinkPostId) {
+      return {
+        postId: permalinkPostId,
+        source: "permalink",
+      };
+    }
 
     const values = collectPostIdSourceValues(permalink, container);
     for (const value of values) {
-      const postId = extractMetadataPostIdFromValue(value);
-      if (postId) return postId;
+      const postId = extractPostIdFromValue(value);
+      if (postId) {
+        return {
+          postId,
+          source: extractMetadataPostIdFromValue(value) ? "metadata" : "fallback",
+        };
+      }
     }
 
-    return "";
+    return {
+      postId: "",
+      source: "none",
+    };
   }
 
   // ==========================================================================
@@ -2534,15 +2636,42 @@
 
   // 將最新最上方貼文整理成可持久化的快照格式。
   function buildLatestTopPostSnapshot(post) {
-    const postKey = getPostKey(post);
+    const postKeyAliases = getPostKeyAliases(post);
+    const postKey = postKeyAliases[0] || "";
     if (!postKey) return null;
 
     return {
       postKey,
+      postKeyAliases,
       author: post.author || "",
       text: truncate(post.text || "", 160),
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  // 將持久化的 top-post snapshot 正規化成可比較的 key 陣列。
+  function getLatestTopPostSnapshotKeys(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return [];
+
+    const keys = [];
+    const seen = new Set();
+
+    appendUniquePostKey(keys, seen, snapshot.postKey);
+    if (Array.isArray(snapshot.postKeyAliases)) {
+      for (const postKey of snapshot.postKeyAliases) {
+        appendUniquePostKey(keys, seen, postKey);
+      }
+    }
+
+    return keys;
+  }
+
+  // 判斷目前抽到的貼文是否與已儲存的最上方貼文 snapshot 屬於同一篇。
+  function matchesLatestTopPostSnapshot(snapshot, post) {
+    const snapshotKeys = new Set(getLatestTopPostSnapshotKeys(snapshot));
+    if (!snapshotKeys.size) return false;
+
+    return getPostKeyAliases(post).some((postKey) => snapshotKeys.has(postKey));
   }
 
   // 將持久化的貼文清單正規化為物件陣列。
@@ -2606,6 +2735,15 @@
     ].filter(Boolean).join("||");
   }
 
+  // 將可用的去重鍵候選加入陣列，並自動去掉空值與重複值。
+  function appendUniquePostKey(keys, seen, value) {
+    const normalized = String(value || "").trim();
+    if (!normalized || seen.has(normalized)) return;
+
+    seen.add(normalized);
+    keys.push(normalized);
+  }
+
   // 建立目前版本使用的主去重鍵，優先順序為 postId > permalink > 文字組合鍵。
   function getPostKey(post) {
     if (post.postId) return `id:${post.postId}`;
@@ -2619,6 +2757,31 @@
     }
 
     return buildFallbackId(post);
+  }
+
+  // 收集同一篇貼文可接受的多組等價 key，降低不同輪抽取結果不一致造成的重複通知。
+  function getPostKeyAliases(post) {
+    if (!post || typeof post !== "object") return [];
+
+    const keys = [];
+    const seen = new Set();
+    const permalink = String(post.permalink || "");
+    const compositeKey = buildCompositePostKey(buildPostKeyFragments(post));
+    const fallbackId = buildFallbackId(post);
+    const legacyKey = getLegacyPostKey(post);
+
+    if (post.postId) {
+      appendUniquePostKey(keys, seen, `id:${post.postId}`);
+    }
+    if (extractPostIdFromValue(permalink)) {
+      appendUniquePostKey(keys, seen, `url:${permalink}`);
+    }
+
+    appendUniquePostKey(keys, seen, compositeKey);
+    appendUniquePostKey(keys, seen, fallbackId);
+    appendUniquePostKey(keys, seen, legacyKey);
+
+    return keys;
   }
 
   // 保留舊版 key 規則，讓舊資料仍能被辨識為已看過。
@@ -2672,12 +2835,7 @@
     if (typeof postKey !== "object" && postKey && groupStore[postKey]) return true;
 
     if (typeof postKey === "object" && postKey) {
-      const currentKey = getPostKey(postKey);
-      const legacyKey = getLegacyPostKey(postKey);
-      return Boolean(
-        (currentKey && groupStore[currentKey]) ||
-        (legacyKey && groupStore[legacyKey])
-      );
+      return getPostKeyAliases(postKey).some((key) => groupStore[key]);
     }
 
     return false;
@@ -2724,8 +2882,17 @@
   function markPostSeen(groupId, postKey) {
     const normalizedGroupId = String(groupId || "");
     const nextGroupStore = getSeenPostGroupStore(normalizedGroupId);
+    const timestamp = new Date().toISOString();
+    const keys = typeof postKey === "object"
+      ? getPostKeyAliases(postKey)
+      : [String(postKey || "").trim()].filter(Boolean);
+    if (!keys.length) {
+      return;
+    }
 
-    nextGroupStore[postKey] = new Date().toISOString();
+    for (const key of keys) {
+      nextGroupStore[key] = timestamp;
+    }
     setSeenPostGroupStore(
       normalizedGroupId,
       trimSeenPostGroupStore(nextGroupStore, getDynamicSeenPostLimit())
@@ -2909,9 +3076,11 @@
   // 將單一候選容器轉成統一的貼文資料結構。
   function extractPostRecord(candidate) {
     const container = candidate.element;
+    const preparation = candidate.preparation || buildPermalinkWarmupState();
     const permalinkDetails = extractPermalinkDetails(container);
     const permalink = permalinkDetails.permalink;
-    const postId = extractPostId(permalink, container);
+    const postIdDetails = extractPostId(permalink, container);
+    const postId = postIdDetails.postId;
     const textDetails = extractPostTextDetails(container);
     const text = textDetails.text;
     const author = extractAuthor(container);
@@ -2935,6 +3104,12 @@
       candidateTop: candidate.top ?? Number.MAX_SAFE_INTEGER,
       candidateQualityScore: candidate.candidateQualityScore ?? 0,
       textSource: textDetails.source,
+      permalinkSource: permalinkDetails.source || "unavailable",
+      canonicalPermalinkCandidateCount: permalinkDetails.canonicalCandidateCount ?? 0,
+      postIdSource: postIdDetails.source || "none",
+      warmupAttempted: Boolean(preparation.warmupAttempted),
+      warmupResolved: Boolean(preparation.warmupResolved),
+      warmupCandidateCount: Number(preparation.warmupCandidateCount) || 0,
       extractedAt: new Date().toISOString(),
     };
 
@@ -2966,7 +3141,7 @@
       } else {
         // 先展開折疊文字，再對疑似時間連結做極小幅度預熱，
         // 讓 Facebook 有機會補上單篇貼文 href。
-        await preparePostContainerForExtraction(candidate.element);
+        candidate.preparation = await preparePostContainerForExtraction(candidate.element);
         post = extractPostRecord(candidate);
         meta.freshExtractCount += 1;
         scanCache?.set(candidate.element, {
@@ -3222,7 +3397,7 @@
       return null;
     }
 
-    if (previousTopPost.postKey === topPostKey) {
+    if (matchesLatestTopPostSnapshot(previousTopPost, topPost)) {
       return applyTopPostShortcutCacheHit(visibleResult, groupId);
     }
 
@@ -3586,9 +3761,7 @@
   async function notifyMatchesAndMarkSeen(groupId, matchesToNotify) {
     for (const item of matchesToNotify) {
       await notifyForPost(item);
-      if (item.postKey) {
-        markPostSeen(groupId, item.postKey);
-      }
+      markPostSeen(groupId, item);
     }
   }
 
@@ -3602,9 +3775,7 @@
   // 即使沒有通知，也要把本輪掃到的貼文記成 seen，避免下一輪重複報警。
   function markSummariesSeen(groupId, summaries) {
     for (const item of summaries) {
-      if (item.postKey) {
-        markPostSeen(groupId, item.postKey);
-      }
+      markPostSeen(groupId, item);
     }
   }
 
@@ -3866,7 +4037,7 @@
     }
 
     const content = truncate(
-      [title, body, clickUrl].filter(Boolean).join("\n"),
+      [title, body].filter(Boolean).join("\n"),
       1900
     );
 
@@ -5101,10 +5272,17 @@
       indexLabel: `#${index + 1}`,
       sourceLabel: post.source || "(無)",
       postIdLabel: post.postId || "(無)",
+      postIdSourceLabel: post.postIdSource || "none",
+      permalinkLabel: post.permalink || "(無)",
+      permalinkSourceLabel: post.permalinkSource || "unavailable",
+      canonicalPermalinkCandidateCountLabel: String(post.canonicalPermalinkCandidateCount ?? 0),
       authorLabel: post.author || "(無)",
       timestampLabel: post.timestampText || "(無)",
       containerRoleLabel: post.containerRole || "(無)",
       textSourceLabel: post.textSource || "(無)",
+      warmupAttemptedLabel: post.warmupAttempted ? "是" : "否",
+      warmupResolvedLabel: post.warmupResolved ? "是" : "否",
+      warmupCandidateCountLabel: String(post.warmupCandidateCount ?? 0),
       hasPostIdLabel: post.postId ? "是" : "否",
       includeRuleLabel: post.includeRule || "(無)",
       excludeRuleLabel: post.excludeRule || "(無)",
@@ -5339,12 +5517,16 @@
   // 渲染 debug 區中的單筆貼文明細。
   function renderPanelDebugPostRowHtml(viewState) {
     return `
-      <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);">
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);overflow-wrap:anywhere;word-break:break-word;">
         <div>${escapeHtml(viewState.indexLabel)} 來源=${escapeHtml(viewState.sourceLabel)}</div>
         <div>貼文ID=${escapeHtml(viewState.postIdLabel)}</div>
+        <div>貼文ID來源=${escapeHtml(viewState.postIdSourceLabel)}</div>
+        <div>連結=${escapeHtml(viewState.permalinkLabel)}</div>
+        <div>連結來源=${escapeHtml(viewState.permalinkSourceLabel)} | canonical 候選=${escapeHtml(viewState.canonicalPermalinkCandidateCountLabel)}</div>
         <div>作者=${escapeHtml(viewState.authorLabel)}</div>
         <div>時間=${escapeHtml(viewState.timestampLabel)}</div>
         <div>容器=${escapeHtml(viewState.containerRoleLabel)} | 文字來源=${escapeHtml(viewState.textSourceLabel)}</div>
+        <div>warmup嘗試=${viewState.warmupAttemptedLabel} | warmup補成連結=${viewState.warmupResolvedLabel} | warmup候選=${escapeHtml(viewState.warmupCandidateCountLabel)}</div>
         <div>有貼文ID=${viewState.hasPostIdLabel}</div>
         <div>命中包含=${escapeHtml(viewState.includeRuleLabel)}</div>
         <div>命中排除=${escapeHtml(viewState.excludeRuleLabel)}</div>
@@ -5544,19 +5726,32 @@
       shouldUseTopPostShortcut,
       buildCanonicalGroupPostUrl,
       buildPermalinkDetails,
+      buildGroupScopedPermalinkDetails,
       extractGroupRouteQueryPostId,
+      extractPhotoRouteGroupId,
+      extractPhotoRoutePermalinkDetails,
       getPermalinkSourcePriority,
       isCommentPermalinkHref,
       extractCanonicalPermalinkFromHref,
       getPostContainerSourceLabel,
+      buildPermalinkWarmupState,
+      collectPostIdSourceValues,
       extractPostIdFromValue,
       extractMetadataPostIdFromValue,
+      extractPostId,
       createSeenPostStopState,
       applySeenPostStopObservation,
       buildStableTextSignature,
       buildPostKeyFragments,
       buildCompositePostKey,
       getPostKey,
+      getPostKeyAliases,
+      buildLatestTopPostSnapshot,
+      getLatestTopPostSnapshotKeys,
+      matchesLatestTopPostSnapshot,
+      hasSeenPost,
+      markPostSeen,
+      clearSeenPostsForGroup,
       collectUniquePostsByKey,
       dedupeExtractedPosts,
       trimSeenPostGroupStore,

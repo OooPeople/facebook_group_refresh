@@ -5,6 +5,14 @@ const vm = require("vm");
 const projectRoot = path.resolve(__dirname, "..");
 const userScriptPath = path.join(projectRoot, "src", "facebook_group_refresh.user.js");
 const source = fs.readFileSync(userScriptPath, "utf8");
+const TEST_GROUP_ID = "123456789012345";
+const OTHER_GROUP_ID = "999999999999999";
+const TEST_POST_ID = "9876543210123456";
+const TEST_GROUP_POST_URL = `https://www.facebook.com/groups/${TEST_GROUP_ID}/posts/${TEST_POST_ID}`;
+const TEST_PHOTO_GM_HREF =
+  `https://www.facebook.com/photo/?fbid=1234567890&set=gm.${TEST_POST_ID}&idorvanity=${TEST_GROUP_ID}`;
+const PERMALINK_ANCHOR_SELECTOR =
+  'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]';
 
 function assert(condition, message) {
   if (!condition) {
@@ -26,9 +34,81 @@ function assertDeepEqual(actual, expected, message) {
   }
 }
 
+function assertUserScriptScaffold() {
+  assert(source.includes("// ==UserScript=="), "Missing userscript header.");
+  assert(
+    source.includes("@match        https://www.facebook.com/groups/*"),
+    "Missing Facebook group match rule."
+  );
+  assert(source.includes("(function () {"), "Missing userscript IIFE wrapper.");
+}
+
+function createFakeElement(context, options = {}) {
+  const {
+    attributes = {},
+    dataset = {},
+    innerHTML = "",
+    id = "",
+    href = "",
+    querySelectorAll = () => [],
+  } = options;
+  const element = new context.HTMLElement();
+  element.dataset = { ...dataset };
+  element.innerHTML = innerHTML;
+  element.id = id;
+  element.querySelectorAll = querySelectorAll;
+  element.getAttribute = (name) => {
+    if (name === "href" && href) {
+      return href;
+    }
+    return Object.prototype.hasOwnProperty.call(attributes, name) ? attributes[name] : "";
+  };
+  if (href) {
+    element.href = href;
+  }
+  return element;
+}
+
+function createFakeAnchor(context, options = {}) {
+  const {
+    attributes = {},
+    dataset = {},
+    innerHTML = "",
+    id = "",
+    href = "",
+  } = options;
+  const anchor = new context.HTMLAnchorElement();
+  anchor.dataset = { ...dataset };
+  anchor.innerHTML = innerHTML;
+  anchor.id = id;
+  anchor.href = href;
+  anchor.getAttribute = (name) => {
+    if (name === "href") {
+      return anchor.href || "";
+    }
+    return Object.prototype.hasOwnProperty.call(attributes, name) ? attributes[name] : "";
+  };
+  return anchor;
+}
+
+function createMetadataContainer(context, metadataValue) {
+  return createFakeElement(context, {
+    attributes: {
+      "data-ft": metadataValue,
+    },
+  });
+}
+
+function createAnchorHrefContainer(context, href) {
+  return createFakeElement(context, {
+    querySelectorAll: () => [createFakeAnchor(context, { href })],
+  });
+}
+
 function createTestContext() {
   class FakeHTMLElement {}
   class FakeHTMLAnchorElement extends FakeHTMLElement {}
+  const gmStore = new Map();
 
   const context = {
     __FB_GROUP_REFRESH_TEST_MODE__: true,
@@ -94,11 +174,15 @@ function createTestContext() {
       },
     },
     Notification: function Notification() {},
-    GM_getValue() {
-      return null;
+    GM_getValue(key, fallback = null) {
+      return gmStore.has(key) ? gmStore.get(key) : fallback;
     },
-    GM_setValue() {},
-    GM_deleteValue() {},
+    GM_setValue(key, value) {
+      gmStore.set(key, value);
+    },
+    GM_deleteValue(key) {
+      gmStore.delete(key);
+    },
     GM_notification() {},
     GM_xmlhttpRequest() {},
     setTimeout() {
@@ -123,12 +207,7 @@ function createTestContext() {
 }
 
 function loadTestHooks() {
-  assert(source.includes("// ==UserScript=="), "Missing userscript header.");
-  assert(
-    source.includes("@match        https://www.facebook.com/groups/*"),
-    "Missing Facebook group match rule."
-  );
-  assert(source.includes("(function () {"), "Missing userscript IIFE wrapper.");
+  assertUserScriptScaffold();
 
   const context = createTestContext();
   vm.createContext(context);
@@ -136,7 +215,7 @@ function loadTestHooks() {
 
   const hooks = context.__FB_GROUP_REFRESH_TEST_HOOKS__;
   assert(hooks && typeof hooks === "object", "Missing exported test hooks.");
-  return hooks;
+  return { hooks, context };
 }
 
 function runTest(name, fn) {
@@ -148,10 +227,7 @@ function runTest(name, fn) {
   }
 }
 
-function runTests(hooks) {
-  const permalinkAnchorSelector =
-    'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]';
-
+function runCoreBehaviorTests(hooks) {
   runTest("monitoring control semantics", () => {
     assertEqual(
       hooks.getPauseToggleAction(true),
@@ -225,7 +301,9 @@ function runTests(hooks) {
       "Stable signature should reuse normalized key shape."
     );
   });
+}
 
+function runConfigAndLayoutTests(hooks) {
   runTest("config patch builders", () => {
     assertDeepEqual(
       hooks.buildKeywordConfigPatch({
@@ -350,8 +428,8 @@ function runTests(hooks) {
     );
     assertEqual(
       hooks.getDynamicSeenPostLimit(7),
-      14,
-      "Dynamic seen-post limit should scale with the requested target count."
+      84,
+      "Dynamic seen-post limit should reserve space for per-post alias keys."
     );
   });
 
@@ -457,15 +535,17 @@ function runTests(hooks) {
       "Route-change scans should bypass the top-post shortcut."
     );
   });
+}
 
+function runPermalinkHelperTests(hooks) {
   runTest("permalink helpers", () => {
     assertEqual(
-      hooks.buildCanonicalGroupPostUrl("123456789012345", "9876543210123456"),
-      "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+      hooks.buildCanonicalGroupPostUrl(TEST_GROUP_ID, TEST_POST_ID),
+      TEST_GROUP_POST_URL,
       "Canonical group post URL builder should use the normalized ids."
     );
     assertEqual(
-      hooks.buildCanonicalGroupPostUrl("123456789012345", "short"),
+      hooks.buildCanonicalGroupPostUrl(TEST_GROUP_ID, "short"),
       "",
       "Canonical group post URL builder should reject invalid post ids."
     );
@@ -479,19 +559,81 @@ function runTests(hooks) {
       { permalink: "https://example.com/post/1", source: "source" },
       "Permalink details builder should keep explicit values."
     );
+    assertDeepEqual(
+      hooks.buildGroupScopedPermalinkDetails(
+        TEST_GROUP_ID,
+        TEST_POST_ID,
+        "helper_source",
+        TEST_GROUP_ID
+      ),
+      {
+        permalink: TEST_GROUP_POST_URL,
+        source: "helper_source",
+      },
+      "Group-scoped permalink helper should build canonical group post URLs."
+    );
+    assertDeepEqual(
+      hooks.buildGroupScopedPermalinkDetails(
+        OTHER_GROUP_ID,
+        TEST_POST_ID,
+        "helper_source",
+        TEST_GROUP_ID
+      ),
+      { permalink: "", source: "unavailable" },
+      "Group-scoped permalink helper should reject expected-group mismatches."
+    );
     assertEqual(
       hooks.extractGroupRouteQueryPostId(
-        new URL("https://www.facebook.com/groups/123456789012345/?story_fbid=9876543210123456")
+        new URL(`https://www.facebook.com/groups/${TEST_GROUP_ID}/?story_fbid=${TEST_POST_ID}`)
       ),
-      "9876543210123456",
+      TEST_POST_ID,
       "Group route query parser should read story_fbid."
     );
     assertEqual(
       hooks.extractGroupRouteQueryPostId(
-        new URL("https://www.facebook.com/groups/123456789012345/?set=gm.9876543210123456")
+        new URL(`https://www.facebook.com/groups/${TEST_GROUP_ID}/?set=gm.${TEST_POST_ID}`)
       ),
-      "9876543210123456",
+      TEST_POST_ID,
       "Group route query parser should read gm set ids."
+    );
+    assertEqual(
+      hooks.extractPhotoRouteGroupId(
+        new URL(TEST_PHOTO_GM_HREF),
+        TEST_GROUP_ID
+      ),
+      TEST_GROUP_ID,
+      "Photo route group-id parser should prefer idorvanity when it matches the expected group."
+    );
+    assertEqual(
+      hooks.extractPhotoRouteGroupId(
+        new URL(
+          `https://www.facebook.com/photo/?fbid=1234567890&set=gm.${TEST_POST_ID}&idorvanity=${OTHER_GROUP_ID}`
+        ),
+        TEST_GROUP_ID
+      ),
+      "",
+      "Photo route group-id parser should reject mismatched idorvanity values."
+    );
+    assertDeepEqual(
+      hooks.extractPhotoRoutePermalinkDetails(
+        new URL(TEST_PHOTO_GM_HREF),
+        TEST_GROUP_ID
+      ),
+      {
+        permalink: TEST_GROUP_POST_URL,
+        source: "photo_gm_anchor",
+      },
+      "Photo route permalink helper should normalize gm-based photo URLs."
+    );
+    assertDeepEqual(
+      hooks.extractPhotoRoutePermalinkDetails(
+        new URL(
+          `https://www.facebook.com/photo/?fbid=1234567890&set=gm.${TEST_POST_ID}&idorvanity=${OTHER_GROUP_ID}`
+        ),
+        TEST_GROUP_ID
+      ),
+      { permalink: "", source: "unavailable" },
+      "Photo route permalink helper should reject mismatched groups."
     );
     assertEqual(
       hooks.getPermalinkSourcePriority("groups_post_anchor"),
@@ -505,72 +647,78 @@ function runTests(hooks) {
     );
     assertEqual(
       hooks.isCommentPermalinkHref(
-        "https://www.facebook.com/groups/123456789012345/posts/9876543210123456/?comment_id=111"
+        `${TEST_GROUP_POST_URL}/?comment_id=111`
       ),
       true,
       "Comment permalinks should be detected."
     );
     assertEqual(
-      hooks.isCommentPermalinkHref(
-        "https://www.facebook.com/groups/123456789012345/posts/9876543210123456/"
-      ),
+      hooks.isCommentPermalinkHref(`${TEST_GROUP_POST_URL}/`),
       false,
       "Non-comment permalinks should not be marked as comment links."
     );
     assertDeepEqual(
       hooks.extractCanonicalPermalinkFromHref(
-        "https://www.facebook.com/groups/123456789012345/posts/9876543210123456/?__cft__[0]=abc",
-        "123456789012345"
+        `${TEST_GROUP_POST_URL}/?__cft__[0]=abc`,
+        TEST_GROUP_ID
       ),
       {
-        permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+        permalink: TEST_GROUP_POST_URL,
         source: "groups_post_anchor",
       },
       "Direct group post permalinks should canonicalize cleanly."
     );
     assertDeepEqual(
       hooks.extractCanonicalPermalinkFromHref(
-        "https://www.facebook.com/groups/123456789012345/permalink/9876543210123456/?foo=bar",
-        "123456789012345"
+        `https://www.facebook.com/groups/${TEST_GROUP_ID}/permalink/${TEST_POST_ID}/?foo=bar`,
+        TEST_GROUP_ID
       ),
       {
-        permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+        permalink: TEST_GROUP_POST_URL,
         source: "group_permalink_anchor",
       },
       "Group permalink routes should canonicalize to posts."
     );
     assertDeepEqual(
       hooks.extractCanonicalPermalinkFromHref(
-        "https://www.facebook.com/groups/123456789012345/?set=gm.9876543210123456",
-        "123456789012345"
+        `https://www.facebook.com/groups/${TEST_GROUP_ID}/?set=gm.${TEST_POST_ID}`,
+        TEST_GROUP_ID
       ),
       {
-        permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+        permalink: TEST_GROUP_POST_URL,
         source: "group_query_anchor",
       },
       "Group query routes with gm ids should canonicalize."
     );
     assertDeepEqual(
       hooks.extractCanonicalPermalinkFromHref(
-        "https://www.facebook.com/permalink.php?id=123456789012345&story_fbid=9876543210123456",
-        "123456789012345"
+        `https://www.facebook.com/permalink.php?id=${TEST_GROUP_ID}&story_fbid=${TEST_POST_ID}`,
+        TEST_GROUP_ID
       ),
       {
-        permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+        permalink: TEST_GROUP_POST_URL,
         source: "permalink_php_anchor",
       },
       "permalink.php routes should canonicalize when group id and story id exist."
     );
     assertDeepEqual(
+      hooks.extractCanonicalPermalinkFromHref(TEST_PHOTO_GM_HREF, TEST_GROUP_ID),
+      {
+        permalink: TEST_GROUP_POST_URL,
+        source: "photo_gm_anchor",
+      },
+      "Photo routes with gm set ids and idorvanity should canonicalize to the group post URL."
+    );
+    assertDeepEqual(
       hooks.extractCanonicalPermalinkFromHref(
-        "https://www.facebook.com/groups/999999999999999/posts/9876543210123456",
-        "123456789012345"
+        `https://www.facebook.com/groups/${OTHER_GROUP_ID}/posts/${TEST_POST_ID}`,
+        TEST_GROUP_ID
       ),
       { permalink: "", source: "unavailable" },
       "Expected-group mismatch should reject unrelated group permalinks."
     );
     assertEqual(
-      hooks.getPostContainerSourceLabel(permalinkAnchorSelector),
+      hooks.getPostContainerSourceLabel(PERMALINK_ANCHOR_SELECTOR),
       "permalink_anchor",
       "Primary permalink selector should render as permalink_anchor."
     );
@@ -580,24 +728,77 @@ function runTests(hooks) {
       "Feed child selector should render as a short label."
     );
   });
+}
 
+function runPostIdExtractionTests(hooks, context) {
   runTest("post id extraction", () => {
+    assertEqual(hooks.extractPostIdFromValue(`${TEST_GROUP_POST_URL}/`), TEST_POST_ID, "Post id extractor should read ids from canonical permalinks.");
     assertEqual(
-      hooks.extractPostIdFromValue(
-        "https://www.facebook.com/groups/123456789012345/posts/9876543210123456/"
-      ),
-      "9876543210123456",
-      "Post id extractor should read ids from canonical permalinks."
-    );
-    assertEqual(
-      hooks.extractPostIdFromValue("photo/?fbid=1234567890&set=gm.9876543210123456"),
-      "9876543210123456",
+      hooks.extractPostIdFromValue(`photo/?fbid=1234567890&set=gm.${TEST_POST_ID}`),
+      TEST_POST_ID,
       "Post id extractor should prefer gm ids over photo fbid."
     );
     assertEqual(
-      hooks.extractMetadataPostIdFromValue('"ft_ent_identifier":"9876543210123456"'),
-      "9876543210123456",
+      hooks.extractMetadataPostIdFromValue(`"ft_ent_identifier":"${TEST_POST_ID}"`),
+      TEST_POST_ID,
       "Metadata post id extractor should read ft_ent_identifier."
+    );
+
+    const metadataContainer = createMetadataContainer(
+      context,
+      `"ft_ent_identifier":"${TEST_POST_ID}"`
+    );
+    assertDeepEqual(
+      hooks.extractPostId("", metadataContainer),
+      {
+        postId: TEST_POST_ID,
+        source: "metadata",
+      },
+      "Post-id extraction should preserve metadata as a distinct source classification."
+    );
+
+    const container = createAnchorHrefContainer(context, TEST_PHOTO_GM_HREF);
+
+    assert(
+      hooks.collectPostIdSourceValues("", container).some((value) => {
+        return String(value).includes(`set=gm.${TEST_POST_ID}`);
+      }),
+      "Post-id source collection should include descendant anchor href values."
+    );
+    assertDeepEqual(
+      hooks.extractPostId("", container),
+      {
+        postId: TEST_POST_ID,
+        source: "fallback",
+      },
+      "Post-id fallback should recover gm ids from descendant anchor href values."
+    );
+  });
+}
+
+function runIdentityAndStoreTests(hooks) {
+  runTest("warmup state helper", () => {
+    assertDeepEqual(
+      hooks.buildPermalinkWarmupState(),
+      {
+        warmupAttempted: false,
+        warmupResolved: false,
+        warmupCandidateCount: 0,
+      },
+      "Warmup state helper should provide a stable default shape."
+    );
+    assertDeepEqual(
+      hooks.buildPermalinkWarmupState({
+        warmupAttempted: 1,
+        warmupResolved: "yes",
+        warmupCandidateCount: "4.8",
+      }),
+      {
+        warmupAttempted: true,
+        warmupResolved: true,
+        warmupCandidateCount: 4.8,
+      },
+      "Warmup state helper should normalize booleans and preserve numeric candidate counts."
     );
   });
 
@@ -668,6 +869,98 @@ function runTests(hooks) {
       10
     );
     assertEqual(deduped.length, 3, "Dedupe should keep only unique extracted posts.");
+  });
+
+  runTest("post key aliases and top-post snapshot matching", () => {
+    const canonicalPost = {
+      postId: "9876543210123456",
+      permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+      author: "Alice",
+      text: "Alpha ticket available",
+    };
+    const fallbackOnlyPost = {
+      author: "Alice",
+      text: "Alpha ticket available",
+    };
+
+    assertDeepEqual(
+      hooks.getPostKeyAliases(canonicalPost),
+      [
+        "id:9876543210123456",
+        "url:https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+        "author:alice||text:alphaticketavailable",
+        "alice||alphaticketavailable",
+        "9876543210123456",
+      ],
+      "Canonical posts should expose id, permalink, composite, fallback, and legacy aliases."
+    );
+
+    const snapshot = hooks.buildLatestTopPostSnapshot(canonicalPost);
+    assertDeepEqual(
+      hooks.getLatestTopPostSnapshotKeys(snapshot),
+      hooks.getPostKeyAliases(canonicalPost),
+      "Stored top-post snapshot keys should preserve all aliases."
+    );
+    assertEqual(
+      hooks.matchesLatestTopPostSnapshot(snapshot, fallbackOnlyPost),
+      true,
+      "Top-post snapshot matching should survive missing permalink/postId in later scans."
+    );
+  });
+
+  runTest("seen-post aliases survive missing permalink in later scans", () => {
+    const groupId = "123456789012345";
+    const canonicalPost = {
+      postId: "9876543210123456",
+      permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+      author: "Alice",
+      text: "Alpha ticket available",
+    };
+    const fallbackOnlyPost = {
+      author: "Alice",
+      text: "Alpha ticket available",
+    };
+
+    hooks.clearSeenPostsForGroup(groupId);
+    hooks.markPostSeen(groupId, canonicalPost);
+
+    assertEqual(
+      hooks.hasSeenPost(groupId, fallbackOnlyPost),
+      true,
+      "Seen-post lookup should still match when a later extraction only has fallback identity."
+    );
+  });
+
+  runTest("seen-post alias capacity avoids trimming active posts too aggressively", () => {
+    const targetCount = 8;
+    const dynamicSeenLimit = hooks.getDynamicSeenPostLimit(targetCount);
+    const groupStore = {};
+
+    for (let index = 0; index < targetCount; index += 1) {
+      const post = {
+        postId: `90000000000000${index}`,
+        permalink: `https://www.facebook.com/groups/123456789012345/posts/90000000000000${index}`,
+        author: `Author ${index}`,
+        text: `Alpha ticket ${index}`,
+      };
+      const timestamp = new Date(Date.UTC(2026, 3, 10, 0, 0, index)).toISOString();
+      for (const key of hooks.getPostKeyAliases(post)) {
+        groupStore[key] = timestamp;
+      }
+    }
+
+    const trimmedSeenStore = hooks.trimSeenPostGroupStore(groupStore, dynamicSeenLimit);
+    const retainedPost = {
+      author: "Author 0",
+      text: "Alpha ticket 0",
+    };
+    const retainedAliases = hooks.getPostKeyAliases(retainedPost);
+
+    assertEqual(
+      retainedAliases.some((key) => Boolean(trimmedSeenStore[key])),
+      true,
+      "Seen-store trimming should still retain at least one alias for posts within the active target window."
+    );
   });
 
   runTest("seen-stop helpers", () => {
@@ -763,7 +1056,9 @@ function runTests(hooks) {
       "Duplicate history keys should be replaced."
     );
   });
+}
 
+function runPresentationTests(hooks) {
   runTest("notification formatting", () => {
     const notificationFields = hooks.getNotificationFields({
       author: "Alice",
@@ -851,7 +1146,9 @@ function runTests(hooks) {
       "History field row should keep the label and render the provided value HTML."
     );
   });
+}
 
+function runRuntimeStateTests(hooks) {
   runTest("runtime state helpers", () => {
     assertDeepEqual(
       hooks.buildResetScanRuntimeState(),
@@ -891,8 +1188,18 @@ function runTests(hooks) {
   });
 }
 
-const hooks = loadTestHooks();
-runTests(hooks);
+function runTests(hooks, context) {
+  runCoreBehaviorTests(hooks);
+  runConfigAndLayoutTests(hooks);
+  runPermalinkHelperTests(hooks);
+  runPostIdExtractionTests(hooks, context);
+  runIdentityAndStoreTests(hooks);
+  runPresentationTests(hooks);
+  runRuntimeStateTests(hooks);
+}
+
+const { hooks, context } = loadTestHooks();
+runTests(hooks, context);
 
 console.log("Smoke test passed.");
 console.log(`Checked: ${userScriptPath}`);

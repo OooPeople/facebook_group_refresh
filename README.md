@@ -15,6 +15,7 @@
 - 支援 opt-in 的 `ntfy` 與 Discord Webhook 通知
 - 支援保守 refresh 與自動載入更多貼文
 - 支援貼文去重、通知紀錄與 debug 面板
+- 關鍵字、通知設定、刷新設定與 dedupe 會依社團 ID 個別保存
 
 ## 快速開始
 

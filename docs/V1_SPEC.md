@@ -158,7 +158,7 @@ Extractor 每輪只應檢查最近 N 篇貼文。
 目前實作目標：
 
 - 在多個可見 feed window 中累積使用者設定數量的唯一貼文
-- seen-post dedupe 只保留目前監控社團的 bucket
+- seen-post dedupe 以 group 為命名空間，並允許多個 group bucket 同時存在
 - seen-post history 上限為 `目標貼文數 * 2`
 - match-history 全域保留 10 筆，並在每筆紀錄中顯示社團名稱
 - permalink 欄位已恢復抽取；目前會優先透過群組貼文 anchor、canonical permalink 與保守 warmup 流程取得穩定連結
@@ -190,7 +190,8 @@ seen-post store 應：
 
 目前實作補充：
 
-- seen-post dedupe 仍以 group 為命名空間，但只保留目前 group 的 bucket
+- include / exclude、通知端點、refresh 與 paused 等主要設定都已改為以 group 為命名空間
+- seen-post dedupe 以 group 為命名空間，並保留多個 group bucket
 - match-history 現在是全域清單，而不是每個 group 各自一個 bucket
 
 ## 通知行為

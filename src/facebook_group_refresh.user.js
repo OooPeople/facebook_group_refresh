@@ -39,6 +39,7 @@
     lastNotification: "fb_group_refresh_last_notification",
     refreshRange: "fb_group_refresh_refresh_range",
     panelPosition: "fb_group_refresh_panel_position",
+    groupConfigs: "fb_group_refresh_group_configs",
   };
   const STORE_DEFINITIONS = Object.freeze({
     latestTopPosts: { key: STORAGE_KEYS.latestTopPosts, type: "object" },
@@ -47,6 +48,7 @@
     matchHistory: { key: STORAGE_KEYS.matchHistory, type: "json" },
     lastNotification: { key: STORAGE_KEYS.lastNotification, type: "json" },
     panelPosition: { key: STORAGE_KEYS.panelPosition, type: "json" },
+    groupConfigs: { key: STORAGE_KEYS.groupConfigs, type: "object" },
   });
   const CONFIG_FIELD_DEFINITIONS = Object.freeze({
     includeKeywords: { key: STORAGE_KEYS.include, type: "string", normalize: true },
@@ -73,6 +75,12 @@
     monitoring: ["paused"],
     ui: ["debugVisible"],
   });
+  const GROUP_SCOPED_CONFIG_GROUPS = Object.freeze([
+    "keyword",
+    "notification",
+    "monitoring",
+    "refresh",
+  ]);
 
   const DEFAULT_CONFIG = {
     includeKeywords: "4/4 熱區; 4/4 109; 4/4 117",
@@ -214,6 +222,9 @@
       /\b[a-z0-9]{12,}\.com\b/gi,
       /\bsnproSet[a-z0-9]+\b/gi,
       /\bsotoeSrdpn[a-z0-9]+\b/gi,
+    ],
+    commentActionTrail: [
+      /(?:^|\s)(?:剛剛|昨天|今天|now|\d+\s*(?:分鐘|小時|天|週|個月|月|年|m|min|h|hr|hrs|d|w|mo|y)\s*(?:前)?)?\s*(?:讚|like)\s+(?:回覆|reply)(?:\s|$)/iu,
     ],
     authorFollowSuffix: /\s*[·•]\s*追蹤\s*$/u,
     authorUiLabels: /^(Like|Comment|Share|Most relevant)$/i,
@@ -423,13 +434,78 @@
     return CONFIG_FIELD_DEFINITIONS[name] || null;
   }
 
+  function isGroupScopedConfigGroup(groupName) {
+    return GROUP_SCOPED_CONFIG_GROUPS.includes(groupName);
+  }
+
+  function isGroupScopedConfigField(name) {
+    return Object.entries(CONFIG_GROUP_DEFINITIONS).some(([groupName, fields]) => {
+      return isGroupScopedConfigGroup(groupName) && fields.includes(name);
+    });
+  }
+
   // 讀取 config group 定義，讓對外設定與 storage key mapping 集中管理。
   function getConfigGroupFields(groupName) {
     return CONFIG_GROUP_DEFINITIONS[groupName] || [];
   }
 
-  // 依欄位型別從持久化 storage 讀回單一 config 值。
-  function loadPersistedConfigField(name, fallback = DEFAULT_CONFIG[name]) {
+  function getGroupConfigStore() {
+    return loadNamedObjectStore("groupConfigs");
+  }
+
+  function setGroupConfigStore(store) {
+    saveNamedObjectStore("groupConfigs", store);
+  }
+
+  function readStoredGroupConfigBucket(groupId) {
+    return getNamedGroupObjectValue(
+      "groupConfigs",
+      groupId,
+      {},
+      (value) => value && typeof value === "object" && !Array.isArray(value)
+    );
+  }
+
+  function normalizeGroupConfigBucket(bucket, baseConfig = DEFAULT_CONFIG) {
+    const source = bucket && typeof bucket === "object" && !Array.isArray(bucket)
+      ? bucket
+      : {};
+
+    return {
+      ...buildKeywordConfigPatch(source),
+      ...buildNotificationConfigPatch(source),
+      ...buildMonitoringConfigPatch(source),
+      ...buildRefreshConfigPatch(source, baseConfig),
+    };
+  }
+
+  function getGroupConfigBucket(groupId, baseConfig = DEFAULT_CONFIG) {
+    return normalizeGroupConfigBucket(readStoredGroupConfigBucket(groupId), baseConfig);
+  }
+
+  function setGroupConfigBucket(groupId, bucket, baseConfig = DEFAULT_CONFIG) {
+    if (!groupId) return {};
+
+    const store = getGroupConfigStore();
+    store[groupId] = normalizeGroupConfigBucket(bucket, baseConfig);
+    setGroupConfigStore(store);
+    return store[groupId];
+  }
+
+  function hasLegacyGroupScopedConfigData() {
+    return [
+      STORAGE_KEYS.include,
+      STORAGE_KEYS.exclude,
+      STORAGE_KEYS.ntfyTopic,
+      STORAGE_KEYS.discordWebhook,
+      STORAGE_KEYS.paused,
+      STORAGE_KEYS.autoLoadMorePosts,
+      STORAGE_KEYS.refreshRange,
+    ].some((key) => loadStoredRawValue(key) != null);
+  }
+
+  // 舊版全域設定讀取邏輯保留為 migration fallback，避免直接失去既有設定。
+  function loadLegacyPersistedConfigField(name, fallback = DEFAULT_CONFIG[name]) {
     const definition = getConfigFieldDefinition(name);
     if (!definition) return fallback;
 
@@ -441,21 +517,147 @@
     return definition.normalize ? normalizeText(value) : value;
   }
 
-  // 讀回一組 config 欄位，避免 loadConfig() 與 UI call site 直接碰 storage key。
-  function loadPersistedConfigGroup(groupName, baseConfig = DEFAULT_CONFIG) {
+  function loadLegacyPersistedConfigGroup(groupName, baseConfig = DEFAULT_CONFIG) {
     const patch = {};
 
     for (const fieldName of getConfigGroupFields(groupName)) {
-      patch[fieldName] = loadPersistedConfigField(fieldName, baseConfig[fieldName]);
+      patch[fieldName] = loadLegacyPersistedConfigField(fieldName, baseConfig[fieldName]);
+    }
+
+    return patch;
+  }
+
+  function loadLegacyRefreshConfigOverrides(baseConfig = DEFAULT_CONFIG) {
+    const refreshRange = loadJson(STORAGE_KEYS.refreshRange, null);
+    return {
+      minRefreshSec: refreshRange?.min ?? baseConfig.minRefreshSec,
+      maxRefreshSec: refreshRange?.max ?? baseConfig.maxRefreshSec,
+      jitterEnabled: refreshRange?.jitterEnabled ?? baseConfig.jitterEnabled,
+      fixedRefreshSec: refreshRange?.fixedSec ?? baseConfig.fixedRefreshSec,
+      maxPostsPerScan: clampTargetPostCount(refreshRange?.maxPostsPerScan ?? baseConfig.maxPostsPerScan),
+      autoLoadMorePosts: loadLegacyPersistedConfigField(
+        "autoLoadMorePosts",
+        refreshRange?.autoLoadMorePosts ?? baseConfig.autoLoadMorePosts
+      ),
+    };
+  }
+
+  function buildLegacyGroupConfigMigrationPatch(baseConfig = DEFAULT_CONFIG) {
+    return {
+      ...loadLegacyPersistedConfigGroup("keyword", baseConfig),
+      ...loadLegacyPersistedConfigGroup("notification", baseConfig),
+      ...loadLegacyPersistedConfigGroup("monitoring", baseConfig),
+      ...loadLegacyRefreshConfigOverrides(baseConfig),
+    };
+  }
+
+  function ensureGroupConfigBucketMigrated(groupId, baseConfig = DEFAULT_CONFIG) {
+    const normalizedGroupId = String(groupId || "");
+    if (!normalizedGroupId) {
+      return {};
+    }
+
+    const existingBucket = getGroupConfigBucket(normalizedGroupId, baseConfig);
+    if (Object.keys(existingBucket).length) {
+      return existingBucket;
+    }
+    if (!hasLegacyGroupScopedConfigData()) {
+      return existingBucket;
+    }
+
+    return setGroupConfigBucket(
+      normalizedGroupId,
+      buildLegacyGroupConfigMigrationPatch(baseConfig),
+      baseConfig
+    );
+  }
+
+  function getEffectiveGroupConfigBucket(groupId, baseConfig = DEFAULT_CONFIG) {
+    ensureGroupConfigBucketMigrated(groupId, baseConfig);
+    return getGroupConfigBucket(groupId, baseConfig);
+  }
+
+  function buildRefreshConfigFromGroupBucket(groupBucket, baseConfig = DEFAULT_CONFIG) {
+    return {
+      minRefreshSec: groupBucket.minRefreshSec ?? baseConfig.minRefreshSec,
+      maxRefreshSec: groupBucket.maxRefreshSec ?? baseConfig.maxRefreshSec,
+      jitterEnabled: groupBucket.jitterEnabled ?? baseConfig.jitterEnabled,
+      fixedRefreshSec: groupBucket.fixedRefreshSec ?? baseConfig.fixedRefreshSec,
+      maxPostsPerScan: clampTargetPostCount(groupBucket.maxPostsPerScan ?? baseConfig.maxPostsPerScan),
+      autoLoadMorePosts: Boolean(
+        groupBucket.autoLoadMorePosts ?? baseConfig.autoLoadMorePosts
+      ),
+    };
+  }
+
+  // 依欄位型別從持久化 storage 讀回單一 config 值。
+  function loadPersistedConfigField(name, fallback = DEFAULT_CONFIG[name], options = {}) {
+    const definition = getConfigFieldDefinition(name);
+    if (!definition) return fallback;
+    if (!isGroupScopedConfigField(name)) {
+      return loadLegacyPersistedConfigField(name, fallback);
+    }
+
+    const groupId = String(options.groupId || getCurrentGroupId() || "");
+    const groupBucket = getEffectiveGroupConfigBucket(groupId);
+    if (!Object.prototype.hasOwnProperty.call(groupBucket, name)) {
+      return fallback;
+    }
+
+    if (definition.type === "boolean") {
+      return Boolean(groupBucket[name]);
+    }
+
+    const value = groupBucket[name];
+    return definition.normalize ? normalizeText(value) : value;
+  }
+
+  // 讀回一組 config 欄位，避免 loadConfig() 與 UI call site 直接碰 storage key。
+  function loadPersistedConfigGroup(groupName, baseConfig = DEFAULT_CONFIG, options = {}) {
+    if (isGroupScopedConfigGroup(groupName)) {
+      const groupId = String(options.groupId || getCurrentGroupId() || "");
+      const groupBucket = getEffectiveGroupConfigBucket(groupId, baseConfig);
+      if (groupName === "refresh") {
+        return buildRefreshConfigFromGroupBucket(groupBucket, baseConfig);
+      }
+
+      const patch = {};
+      for (const fieldName of getConfigGroupFields(groupName)) {
+        patch[fieldName] = Object.prototype.hasOwnProperty.call(groupBucket, fieldName)
+          ? groupBucket[fieldName]
+          : baseConfig[fieldName];
+      }
+      return patch;
+    }
+
+    const patch = {};
+
+    for (const fieldName of getConfigGroupFields(groupName)) {
+      patch[fieldName] = loadPersistedConfigField(fieldName, baseConfig[fieldName], options);
     }
 
     return patch;
   }
 
   // 依欄位型別將單一 config 值寫回 storage，必要時順手移除空值欄位。
-  function persistConfigFieldValue(name, value) {
+  function persistConfigFieldValue(name, value, options = {}) {
     const definition = getConfigFieldDefinition(name);
     if (!definition) return value;
+    if (isGroupScopedConfigField(name)) {
+      const groupId = String(options.groupId || getCurrentGroupId() || "");
+      if (!groupId) {
+        return value;
+      }
+
+      const nextBucket = getEffectiveGroupConfigBucket(groupId);
+      if (definition.type === "boolean") {
+        nextBucket[name] = Boolean(value);
+      } else {
+        nextBucket[name] = definition.normalize ? normalizeText(value) : String(value || "");
+      }
+      setGroupConfigBucket(groupId, nextBucket);
+      return nextBucket[name];
+    }
 
     if (definition.type === "boolean") {
       const normalized = Boolean(value);
@@ -474,14 +676,22 @@
   }
 
   // 批次寫回同一組 config 欄位，讓 persistence path 與 UI handler 解耦。
-  function persistConfigGroup(groupName, config = STATE.config) {
+  function persistConfigGroup(groupName, config = STATE.config, options = {}) {
     for (const fieldName of getConfigGroupFields(groupName)) {
-      persistConfigFieldValue(fieldName, config[fieldName]);
+      persistConfigFieldValue(fieldName, config[fieldName], options);
     }
   }
 
   // 將 refresh 相關持久化欄位轉成 config override，集中舊格式相容邏輯。
-  function loadRefreshConfigOverrides() {
+  function loadRefreshConfigOverrides(options = {}) {
+    const groupId = String(options.groupId || getCurrentGroupId() || "");
+    if (groupId) {
+      return buildRefreshConfigFromGroupBucket(
+        getEffectiveGroupConfigBucket(groupId),
+        DEFAULT_CONFIG
+      );
+    }
+
     const refreshRange = loadJson(STORAGE_KEYS.refreshRange, null);
     return {
       minRefreshSec: refreshRange?.min ?? DEFAULT_CONFIG.minRefreshSec,
@@ -508,16 +718,26 @@
     };
   }
 
-  // 從持久化儲存讀回目前設定，並將舊格式 refreshRange 合併回執行設定。
-  function loadConfig() {
+  // 從持久化儲存讀回指定群組設定；群組層設定缺值時會先嘗試舊版全域設定 migration。
+  function loadConfigForGroup(groupId = getCurrentGroupId()) {
     return {
       ...DEFAULT_CONFIG,
-      ...loadPersistedConfigGroup("keyword"),
-      ...loadPersistedConfigGroup("notification"),
-      ...loadPersistedConfigGroup("monitoring"),
+      ...loadPersistedConfigGroup("keyword", DEFAULT_CONFIG, { groupId }),
+      ...loadPersistedConfigGroup("notification", DEFAULT_CONFIG, { groupId }),
+      ...loadPersistedConfigGroup("monitoring", DEFAULT_CONFIG, { groupId }),
       ...loadPersistedConfigGroup("ui"),
-      ...loadRefreshConfigOverrides(),
+      ...loadRefreshConfigOverrides({ groupId }),
     };
+  }
+
+  function loadConfig() {
+    return loadConfigForGroup(getCurrentGroupId());
+  }
+
+  function reloadCurrentGroupConfig() {
+    const nextConfig = loadConfigForGroup(getCurrentGroupId());
+    setConfigPatch(nextConfig);
+    return nextConfig;
   }
 
   // 以字串形式讀取儲存值，讀不到時回傳預設值。
@@ -748,8 +968,10 @@
   }
 
   // 從持久化 storage 重新 hydration 通知端點設定，供 notifier 與 settings modal 共用。
-  function hydrateNotificationConfigFromStorage() {
-    return applyNotificationConfigPatch(loadPersistedConfigGroup("notification"));
+  function hydrateNotificationConfigFromStorage(groupId = getCurrentGroupId()) {
+    return applyNotificationConfigPatch(
+      loadPersistedConfigGroup("notification", DEFAULT_CONFIG, { groupId })
+    );
   }
 
   // 將 include / exclude 關鍵字草稿整理成標準 config patch。
@@ -838,24 +1060,34 @@
   }
 
   // 寫回 include / exclude 正式設定。
-  function persistKeywordConfig(config = STATE.config) {
-    persistConfigGroup("keyword", config);
+  function persistKeywordConfig(config = STATE.config, options = {}) {
+    persistConfigGroup("keyword", config, options);
   }
 
   // 寫回 refresh 相關正式設定。
-  function persistRefreshConfig(config = STATE.config) {
+  function persistRefreshConfig(config = STATE.config, options = {}) {
+    const groupId = String(options.groupId || getCurrentGroupId() || "");
+    if (groupId) {
+      const nextBucket = {
+        ...getEffectiveGroupConfigBucket(groupId, config),
+        ...buildRefreshConfigPatch(config, config),
+      };
+      setGroupConfigBucket(groupId, nextBucket, config);
+      return;
+    }
+
     saveJson(STORAGE_KEYS.refreshRange, buildRefreshSettingsPayloadFromConfig(config));
-    persistConfigFieldValue("autoLoadMorePosts", config.autoLoadMorePosts);
+    persistConfigFieldValue("autoLoadMorePosts", config.autoLoadMorePosts, options);
   }
 
   // 寫回通知端點設定。
-  function persistNotificationConfig(config = STATE.config) {
-    persistConfigGroup("notification", config);
+  function persistNotificationConfig(config = STATE.config, options = {}) {
+    persistConfigGroup("notification", config, options);
   }
 
   // 寫回 monitoring 設定。
-  function persistMonitoringConfig(config = STATE.config) {
-    persistConfigGroup("monitoring", config);
+  function persistMonitoringConfig(config = STATE.config, options = {}) {
+    persistConfigGroup("monitoring", config, options);
   }
 
   // 寫回 UI 設定。
@@ -870,7 +1102,7 @@
 
     setConfigPatch(normalizedPatch);
     if (options.persist) {
-      persistKeywordConfig();
+      persistKeywordConfig(STATE.config, options);
     }
 
     return normalizedPatch;
@@ -883,7 +1115,7 @@
 
     setConfigPatch(normalizedPatch);
     if (options.persist) {
-      persistRefreshConfig();
+      persistRefreshConfig(STATE.config, options);
     }
 
     return normalizedPatch;
@@ -896,7 +1128,7 @@
 
     setConfigPatch(normalizedPatch);
     if (options.persist) {
-      persistNotificationConfig();
+      persistNotificationConfig(STATE.config, options);
     }
 
     return normalizedPatch;
@@ -909,7 +1141,7 @@
 
     setConfigPatch(normalizedPatch);
     if (options.persist) {
-      persistMonitoringConfig();
+      persistMonitoringConfig(STATE.config, options);
     }
 
     return normalizedPatch;
@@ -1317,6 +1549,7 @@
   // 過濾掉非貼文候選，例如排序控制列。
   function getNonPostReason(post) {
     const text = normalizeText(post?.text);
+    const rawText = normalizeText(post?.rawText || post?.text);
     const author = normalizeText(post?.author);
 
     if (isFeedSortControlText(text)) {
@@ -1328,6 +1561,14 @@
       (isFeedSortControlText(text) || isFeedSortControlText(`${author} ${text}`))
     ) {
       return "feed_sort_control";
+    }
+
+    if (
+      post?.textSource !== "primary" &&
+      post?.containerRole === "article" &&
+      hasCommentActionTrail(rawText)
+    ) {
+      return "comment_reply";
     }
 
     return "";
@@ -1602,6 +1843,25 @@
     return rect.bottom >= -upperThreshold && rect.top <= lowerThreshold;
   }
 
+  function isElementInContainerUpperRegion(element, container, options = {}) {
+    if (!(element instanceof HTMLElement) || !(container instanceof HTMLElement)) return false;
+
+    const {
+      minUpperRegionPx = 180,
+      upperRegionRatio = 0.42,
+      topSlackPx = 16,
+    } = options;
+    const containerRect = container.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    const relativeTop = elementRect.top - containerRect.top;
+    const upperRegionThreshold = Math.max(
+      minUpperRegionPx,
+      Math.round(containerRect.height * upperRegionRatio)
+    );
+
+    return relativeTop >= -topSlackPx && relativeTop <= upperRegionThreshold;
+  }
+
   // 辨識貼文內的「查看更多 / See more」按鈕。
   function isPostTextExpander(element, container) {
     if (!(element instanceof HTMLElement) || !(container instanceof HTMLElement)) return false;
@@ -1665,16 +1925,16 @@
   function getCanonicalPostElement(node) {
     if (!(node instanceof HTMLElement)) return null;
 
-    // When a real post permalink/time anchor exists, prefer the article that
-    // owns that anchor instead of the broader feed wrapper.
-    const permalinkDrivenElement = findPermalinkAnchorDrivenPostElement(node);
-    if (permalinkDrivenElement instanceof HTMLElement) {
-      return permalinkDrivenElement;
-    }
-
     const feedChild = findFeedChildContainer(node);
     if (feedChild instanceof HTMLElement) {
       return feedChild;
+    }
+
+    // On non-feed wrappers, still allow permalink-driven promotion to the
+    // closest post article.
+    const permalinkDrivenElement = findPermalinkAnchorDrivenPostElement(node);
+    if (permalinkDrivenElement instanceof HTMLElement) {
+      return permalinkDrivenElement;
     }
 
     // Prefer the feed child wrapper over nested articles so comment/reply
@@ -2021,13 +2281,16 @@
     return anchors;
   }
 
-  function collectCanonicalPermalinkCandidates(scopeNode, expectedGroupId = "") {
+  function collectCanonicalPermalinkCandidates(scopeNode, expectedGroupId = "", options = {}) {
     if (!(scopeNode instanceof HTMLElement)) return [];
 
+    const { upperRegionOnly = false } = options;
     const candidates = [];
     const seen = new Set();
 
     for (const anchor of collectAnchorsFromScope(scopeNode, SELECTORS.postPermalinkAnchors)) {
+      if (upperRegionOnly && !isElementInContainerUpperRegion(anchor, scopeNode)) continue;
+
       const href = anchor.href || anchor.getAttribute("href") || "";
       const details = extractCanonicalPermalinkFromHref(href, expectedGroupId);
       if (!details.permalink || seen.has(details.permalink)) continue;
@@ -2249,7 +2512,11 @@
   function findPermalinkAnchorDrivenPostElement(node, expectedGroupId = getCurrentGroupId()) {
     if (!(node instanceof HTMLElement)) return null;
 
-    const primaryCandidate = collectCanonicalPermalinkCandidates(node, expectedGroupId)[0] || null;
+    const primaryCandidate = collectCanonicalPermalinkCandidates(
+      node,
+      expectedGroupId,
+      { upperRegionOnly: true }
+    )[0] || null;
     if (!primaryCandidate?.anchor) return null;
 
     const article = primaryCandidate.anchor.closest('[role="article"]');
@@ -2274,17 +2541,24 @@
 
     addScope(container, "container");
 
+    const shouldInspectNestedArticles = container.matches('[role="article"]');
     const permalinkDriven = findPermalinkAnchorDrivenPostElement(container);
-    if (permalinkDriven instanceof HTMLElement && permalinkDriven !== container) {
+    if (
+      shouldInspectNestedArticles &&
+      permalinkDriven instanceof HTMLElement &&
+      permalinkDriven !== container
+    ) {
       addScope(permalinkDriven, "permalink_focus");
     }
 
-    let nestedArticleIndex = 0;
-    for (const article of container.querySelectorAll('[role="article"]')) {
-      if (!(article instanceof HTMLElement)) continue;
-      nestedArticleIndex += 1;
-      addScope(article, `nested_article_${nestedArticleIndex}`);
-      if (nestedArticleIndex >= 2) break;
+    if (shouldInspectNestedArticles) {
+      let nestedArticleIndex = 0;
+      for (const article of container.querySelectorAll('[role="article"]')) {
+        if (!(article instanceof HTMLElement)) continue;
+        nestedArticleIndex += 1;
+        addScope(article, `nested_article_${nestedArticleIndex}`);
+        if (nestedArticleIndex >= 2) break;
+      }
     }
 
     const closestArticle = container.closest('[role="article"]');
@@ -2315,7 +2589,11 @@
     for (const scope of scopes) {
       if (scope.diagnosticOnly) continue;
 
-      const canonicalCandidates = collectCanonicalPermalinkCandidates(scope.node, expectedGroupId);
+      const canonicalCandidates = collectCanonicalPermalinkCandidates(
+        scope.node,
+        expectedGroupId,
+        { upperRegionOnly: scope.label === "container" && !container.matches('[role="article"]') }
+      );
       canonicalCandidateCount += canonicalCandidates.length;
       for (const candidate of canonicalCandidates) {
         if (candidate.permalink) {
@@ -2459,6 +2737,24 @@
     }) || "";
   }
 
+  function hasCommentActionTrail(value) {
+    const text = normalizeText(value);
+    if (!text) return false;
+
+    return REGEX_PATTERNS.commentActionTrail.some((pattern) => pattern.test(text));
+  }
+
+  function stripCommentActionTrail(value) {
+    let text = String(value || "");
+    if (!text) return "";
+
+    for (const pattern of REGEX_PATTERNS.commentActionTrail) {
+      text = text.replace(pattern, " ");
+    }
+
+    return normalizeText(text);
+  }
+
   // 優先從 Facebook 較穩定的貼文訊息區塊抽正文，失敗才退回通用 dir="auto" 掃描。
   function extractPostTextDetails(container) {
     const primarySnippets = collectUniqueTextSnippets(container, SELECTORS.primaryPostText, {
@@ -2468,8 +2764,10 @@
     });
 
     if (primarySnippets.length) {
+      const rawText = normalizeText(primarySnippets.join(" "));
       return {
-        text: cleanExtractedText(primarySnippets.join(" ")),
+        text: cleanExtractedText(rawText),
+        rawText,
         source: "primary",
       };
     }
@@ -2478,17 +2776,27 @@
       normalize: cleanExtractedText,
       minLength: 6,
       maxItems: 8,
+      shouldInclude: (_text, node) => {
+        return isElementInContainerUpperRegion(node, container, {
+          minUpperRegionPx: 210,
+          upperRegionRatio: 0.46,
+        });
+      },
     });
 
     if (fallbackSnippets.length) {
+      const rawText = normalizeText(fallbackSnippets.join(" "));
       return {
-        text: cleanExtractedText(fallbackSnippets.join(" ")),
+        text: cleanExtractedText(rawText),
+        rawText,
         source: "fallback",
       };
     }
 
+    const rawText = normalizeText(container.innerText);
     return {
-      text: cleanExtractedText(container.innerText),
+      text: cleanExtractedText(rawText),
+      rawText,
       source: "container",
     };
   }
@@ -2502,6 +2810,8 @@
   function cleanExtractedText(value) {
     let text = normalizeText(value);
     if (!text) return "";
+
+    text = stripCommentActionTrail(text);
 
     for (const fragment of TEXT_PATTERNS.noisyTextFragments) {
       text = text.replaceAll(fragment, " ");
@@ -2850,16 +3160,25 @@
     return Object.fromEntries(entries.slice(0, limit));
   }
 
-  // 建立只保留目前群組 bucket 的 seen-post store。
-  function buildSeenPostsStoreForGroup(groupId, groupStore) {
+  // 建立更新後的 seen-post store，只替換指定群組 bucket，保留其他群組資料。
+  function buildSeenPostsStoreForGroup(groupId, groupStore, store = getSeenPostsStore()) {
     const normalizedGroupId = String(groupId || "");
     if (!normalizedGroupId) {
-      return {};
+      return store && typeof store === "object" ? store : {};
     }
 
-    return {
-      [normalizedGroupId]: groupStore,
-    };
+    const nextStore = store && typeof store === "object" ? { ...store } : {};
+    const normalizedGroupStore = groupStore && typeof groupStore === "object"
+      ? groupStore
+      : {};
+
+    if (Object.keys(normalizedGroupStore).length) {
+      nextStore[normalizedGroupId] = normalizedGroupStore;
+    } else {
+      delete nextStore[normalizedGroupId];
+    }
+
+    return nextStore;
   }
 
   // 讀取指定群組的 seen-post bucket；格式不符時回退為空物件。
@@ -2873,9 +3192,9 @@
     return groupStore && typeof groupStore === "object" ? groupStore : {};
   }
 
-  // 只寫回指定群組的 seen-post bucket，其他群組資料一律丟棄。
+  // 只寫回指定群組的 seen-post bucket，並保留其他群組資料。
   function setSeenPostGroupStore(groupId, groupStore) {
-    setSeenPostsStore(buildSeenPostsStoreForGroup(groupId, groupStore));
+    setSeenPostsStore(buildSeenPostsStoreForGroup(groupId, groupStore, getSeenPostsStore()));
   }
 
   // 將貼文標記為已看過，並依時間保留最近 N 筆。
@@ -5634,6 +5953,7 @@
 
   // 封裝 route 變更後的共同行為，集中處理 refresh / observer / scan / render。
   function handleRouteTransition() {
+    reloadCurrentGroupConfig();
     resetRouteScanState();
     clearRefreshTimer();
     reinstallObserverAndScheduleScan("route-change");
@@ -5711,6 +6031,10 @@
       buildNotificationConfigPatch,
       buildMonitoringConfigPatch,
       buildUiConfigPatch,
+      getGroupConfigBucket,
+      setGroupConfigBucket,
+      loadConfigForGroup,
+      reloadCurrentGroupConfig,
       getLoadMoreMode,
       hydrateNotificationConfigFromStorage,
       normalizePanelPosition,
@@ -5739,6 +6063,10 @@
       extractPostIdFromValue,
       extractMetadataPostIdFromValue,
       extractPostId,
+      hasCommentActionTrail,
+      stripCommentActionTrail,
+      cleanExtractedText,
+      getNonPostReason,
       createSeenPostStopState,
       applySeenPostStopObservation,
       buildStableTextSignature,
@@ -5749,6 +6077,12 @@
       buildLatestTopPostSnapshot,
       getLatestTopPostSnapshotKeys,
       matchesLatestTopPostSnapshot,
+      getLatestTopPostForGroup,
+      setLatestTopPostForGroup,
+      getLatestScanPostsForGroup,
+      setLatestScanPostsForGroup,
+      getSeenPostGroupStore,
+      setSeenPostGroupStore,
       hasSeenPost,
       markPostSeen,
       clearSeenPostsForGroup,

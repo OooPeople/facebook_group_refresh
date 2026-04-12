@@ -537,6 +537,165 @@ function runConfigAndLayoutTests(hooks) {
   });
 }
 
+function clearConfigStorage(context) {
+  [
+    "fb_group_refresh_include",
+    "fb_group_refresh_exclude",
+    "fb_group_refresh_paused",
+    "fb_group_refresh_debug_visible",
+    "fb_group_refresh_ntfy_topic",
+    "fb_group_refresh_discord_webhook",
+    "fb_group_refresh_auto_load_more_posts",
+    "fb_group_refresh_refresh_range",
+    "fb_group_refresh_group_configs",
+  ].forEach((key) => context.GM_deleteValue(key));
+}
+
+function clearGroupStateStorage(context) {
+  [
+    "fb_group_refresh_seen_posts",
+    "fb_group_refresh_latest_top_posts",
+    "fb_group_refresh_latest_scan_posts",
+  ].forEach((key) => context.GM_deleteValue(key));
+}
+
+function runGroupScopedConfigTests(hooks, context) {
+  runTest("group-scoped config loading keeps groups isolated", () => {
+    clearConfigStorage(context);
+    context.GM_setValue(
+      "fb_group_refresh_group_configs",
+      JSON.stringify({
+        [TEST_GROUP_ID]: {
+          includeKeywords: "alpha only",
+          excludeKeywords: "sold",
+          ntfyTopic: "topic-a",
+          paused: false,
+          autoLoadMorePosts: false,
+          minRefreshSec: 12,
+          maxRefreshSec: 18,
+          jitterEnabled: true,
+          fixedRefreshSec: 45,
+          maxPostsPerScan: 4,
+        },
+        [OTHER_GROUP_ID]: {
+          includeKeywords: "beta only",
+          excludeKeywords: "taken",
+          ntfyTopic: "topic-b",
+          paused: true,
+          autoLoadMorePosts: true,
+          minRefreshSec: 30,
+          maxRefreshSec: 40,
+          jitterEnabled: false,
+          fixedRefreshSec: 55,
+          maxPostsPerScan: 7,
+        },
+      })
+    );
+
+    const firstGroupConfig = hooks.loadConfigForGroup(TEST_GROUP_ID);
+    const secondGroupConfig = hooks.loadConfigForGroup(OTHER_GROUP_ID);
+
+    assertEqual(firstGroupConfig.includeKeywords, "alpha only", "First group should load its own include keywords.");
+    assertEqual(firstGroupConfig.excludeKeywords, "sold", "First group should load its own exclude keywords.");
+    assertEqual(firstGroupConfig.ntfyTopic, "topic-a", "First group should load its own ntfy topic.");
+    assertEqual(firstGroupConfig.paused, false, "First group should load its own paused flag.");
+    assertEqual(firstGroupConfig.autoLoadMorePosts, false, "First group should load its own load-more setting.");
+    assertEqual(firstGroupConfig.minRefreshSec, 12, "First group should load its own min refresh.");
+    assertEqual(firstGroupConfig.maxRefreshSec, 18, "First group should load its own max refresh.");
+    assertEqual(firstGroupConfig.maxPostsPerScan, 4, "First group should load its own scan target.");
+
+    assertEqual(secondGroupConfig.includeKeywords, "beta only", "Second group should not reuse the first group's include keywords.");
+    assertEqual(secondGroupConfig.excludeKeywords, "taken", "Second group should not reuse the first group's exclude keywords.");
+    assertEqual(secondGroupConfig.ntfyTopic, "topic-b", "Second group should load its own ntfy topic.");
+    assertEqual(secondGroupConfig.paused, true, "Second group should load its own paused flag.");
+    assertEqual(secondGroupConfig.autoLoadMorePosts, true, "Second group should load its own load-more setting.");
+    assertEqual(secondGroupConfig.minRefreshSec, 30, "Second group should load its own min refresh.");
+    assertEqual(secondGroupConfig.maxRefreshSec, 40, "Second group should load its own max refresh.");
+    assertEqual(secondGroupConfig.jitterEnabled, false, "Second group should load its own jitter flag.");
+    assertEqual(secondGroupConfig.fixedRefreshSec, 55, "Second group should load its own fixed refresh.");
+    assertEqual(secondGroupConfig.maxPostsPerScan, 7, "Second group should load its own scan target.");
+  });
+
+  runTest("legacy global config migrates into the first requested group bucket", () => {
+    clearConfigStorage(context);
+    context.GM_setValue("fb_group_refresh_include", " legacy include ");
+    context.GM_setValue("fb_group_refresh_exclude", " legacy exclude ");
+    context.GM_setValue("fb_group_refresh_ntfy_topic", " legacy-topic ");
+    context.GM_setValue("fb_group_refresh_paused", "false");
+    context.GM_setValue(
+      "fb_group_refresh_refresh_range",
+      JSON.stringify({
+        min: 22,
+        max: 28,
+        jitterEnabled: true,
+        fixedSec: 90,
+        maxPostsPerScan: 6,
+        autoLoadMorePosts: false,
+      })
+    );
+
+    const migratedConfig = hooks.loadConfigForGroup(TEST_GROUP_ID);
+    const migratedBucket = hooks.getGroupConfigBucket(TEST_GROUP_ID);
+
+    assertEqual(migratedConfig.includeKeywords, "legacy include", "Legacy include keywords should migrate into the requested group.");
+    assertEqual(migratedConfig.excludeKeywords, "legacy exclude", "Legacy exclude keywords should migrate into the requested group.");
+    assertEqual(migratedConfig.ntfyTopic, "legacy-topic", "Legacy notification settings should migrate into the requested group.");
+    assertEqual(migratedConfig.paused, false, "Legacy paused flag should migrate into the requested group.");
+    assertEqual(migratedConfig.minRefreshSec, 22, "Legacy refresh min should migrate into the requested group.");
+    assertEqual(migratedConfig.maxRefreshSec, 28, "Legacy refresh max should migrate into the requested group.");
+    assertEqual(migratedConfig.maxPostsPerScan, 6, "Legacy max-posts-per-scan should migrate into the requested group.");
+    assertEqual(migratedConfig.autoLoadMorePosts, false, "Legacy auto-load-more should migrate into the requested group.");
+
+    assertEqual(migratedBucket.includeKeywords, "legacy include", "Migrated bucket should persist include keywords.");
+    assertEqual(migratedBucket.excludeKeywords, "legacy exclude", "Migrated bucket should persist exclude keywords.");
+    assertEqual(migratedBucket.ntfyTopic, "legacy-topic", "Migrated bucket should persist notification settings.");
+    assertEqual(migratedBucket.paused, false, "Migrated bucket should persist the paused flag.");
+    assertEqual(migratedBucket.minRefreshSec, 22, "Migrated bucket should persist refresh settings.");
+    assertEqual(migratedBucket.maxPostsPerScan, 6, "Migrated bucket should persist scan target settings.");
+  });
+
+  runTest("reloadCurrentGroupConfig follows the current route group id", () => {
+    clearConfigStorage(context);
+    context.GM_setValue(
+      "fb_group_refresh_group_configs",
+      JSON.stringify({
+        [TEST_GROUP_ID]: {
+          includeKeywords: "route alpha",
+          ntfyTopic: "route-topic-a",
+        },
+        [OTHER_GROUP_ID]: {
+          includeKeywords: "route beta",
+          ntfyTopic: "route-topic-b",
+        },
+      })
+    );
+
+    context.location.pathname = `/groups/${TEST_GROUP_ID}/`;
+    context.location.href = `https://www.facebook.com/groups/${TEST_GROUP_ID}/`;
+    const firstReload = hooks.reloadCurrentGroupConfig();
+
+    context.location.pathname = `/groups/${OTHER_GROUP_ID}/`;
+    context.location.href = `https://www.facebook.com/groups/${OTHER_GROUP_ID}/`;
+    const secondReload = hooks.reloadCurrentGroupConfig();
+
+    assertEqual(
+      firstReload.includeKeywords,
+      "route alpha",
+      "Reload should follow the first route group's config bucket."
+    );
+    assertEqual(
+      secondReload.includeKeywords,
+      "route beta",
+      "Reload should switch to the new route group's config bucket."
+    );
+    assertEqual(
+      secondReload.ntfyTopic,
+      "route-topic-b",
+      "Reload should refresh notification settings for the current route group."
+    );
+  });
+}
+
 function runPermalinkHelperTests(hooks) {
   runTest("permalink helpers", () => {
     assertEqual(
@@ -774,9 +933,49 @@ function runPostIdExtractionTests(hooks, context) {
       "Post-id fallback should recover gm ids from descendant anchor href values."
     );
   });
+
+  runTest("comment text cleanup and filtering", () => {
+    assertEqual(
+      hooks.hasCommentActionTrail("劉國忠 超級美的。 5天 讚 回覆"),
+      true,
+      "Comment-action helper should recognize common comment footer text."
+    );
+    assertEqual(
+      hooks.stripCommentActionTrail("劉國忠 超級美的。 5天 讚 回覆"),
+      "劉國忠 超級美的。",
+      "Comment-action stripping should remove trailing footer actions."
+    );
+    assertEqual(
+      hooks.cleanExtractedText("劉國忠 超級美的。 5天 讚 回覆"),
+      "劉國忠 超級美的。",
+      "Text cleanup should strip comment footer actions before final normalization."
+    );
+    assertEqual(
+      hooks.getNonPostReason({
+        text: "劉國忠 超級美的。",
+        rawText: "劉國忠 超級美的。 5天 讚 回覆",
+        author: "劉國忠",
+        textSource: "container",
+        containerRole: "article",
+      }),
+      "comment_reply",
+      "Article-level comment rows should be filtered as non-post content."
+    );
+    assertEqual(
+      hooks.getNonPostReason({
+        text: "販售 3/21 特攻兩張",
+        rawText: "販售 3/21 特攻兩張",
+        author: "黃信瑋",
+        textSource: "primary",
+        containerRole: "feed_child",
+      }),
+      "",
+      "Primary post text should not be misclassified as comment content."
+    );
+  });
 }
 
-function runIdentityAndStoreTests(hooks) {
+function runIdentityAndStoreTests(hooks, context) {
   runTest("warmup state helper", () => {
     assertDeepEqual(
       hooks.buildPermalinkWarmupState(),
@@ -928,6 +1127,98 @@ function runIdentityAndStoreTests(hooks) {
       hooks.hasSeenPost(groupId, fallbackOnlyPost),
       true,
       "Seen-post lookup should still match when a later extraction only has fallback identity."
+    );
+  });
+
+  runTest("seen-post stores preserve other groups", () => {
+    clearGroupStateStorage(context);
+    const firstGroupPost = {
+      postId: "9876543210123456",
+      permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+      author: "Alice",
+      text: "Alpha ticket available",
+    };
+    const secondGroupPost = {
+      postId: "1234567890098765",
+      permalink: "https://www.facebook.com/groups/999999999999999/posts/1234567890098765",
+      author: "Bob",
+      text: "Beta ticket available",
+    };
+
+    hooks.markPostSeen(TEST_GROUP_ID, firstGroupPost);
+    hooks.markPostSeen(OTHER_GROUP_ID, secondGroupPost);
+
+    assertEqual(
+      hooks.hasSeenPost(TEST_GROUP_ID, firstGroupPost),
+      true,
+      "First group should retain its own seen record."
+    );
+    assertEqual(
+      hooks.hasSeenPost(OTHER_GROUP_ID, secondGroupPost),
+      true,
+      "Second group should retain its own seen record."
+    );
+    assertEqual(
+      hooks.hasSeenPost(TEST_GROUP_ID, secondGroupPost),
+      false,
+      "Seen-post lookup should stay isolated by group."
+    );
+
+    hooks.clearSeenPostsForGroup(TEST_GROUP_ID);
+
+    assertEqual(
+      hooks.hasSeenPost(TEST_GROUP_ID, firstGroupPost),
+      false,
+      "Clearing one group should remove that group's seen state."
+    );
+    assertEqual(
+      hooks.hasSeenPost(OTHER_GROUP_ID, secondGroupPost),
+      true,
+      "Clearing one group should not remove other groups' seen state."
+    );
+  });
+
+  runTest("top-post and latest-scan caches stay isolated per group", () => {
+    clearGroupStateStorage(context);
+    const firstTopPost = {
+      postId: "9876543210123456",
+      permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+      author: "Alice",
+      text: "Alpha ticket available",
+    };
+    const secondTopPost = {
+      postId: "1234567890098765",
+      permalink: "https://www.facebook.com/groups/999999999999999/posts/1234567890098765",
+      author: "Bob",
+      text: "Beta ticket available",
+    };
+    const firstScanPosts = [firstTopPost, { author: "A2", text: "Alpha follow-up" }];
+    const secondScanPosts = [secondTopPost, { author: "B2", text: "Beta follow-up" }];
+
+    hooks.setLatestTopPostForGroup(TEST_GROUP_ID, firstTopPost);
+    hooks.setLatestTopPostForGroup(OTHER_GROUP_ID, secondTopPost);
+    hooks.setLatestScanPostsForGroup(TEST_GROUP_ID, firstScanPosts);
+    hooks.setLatestScanPostsForGroup(OTHER_GROUP_ID, secondScanPosts);
+
+    assertEqual(
+      hooks.getLatestTopPostForGroup(TEST_GROUP_ID).author,
+      "Alice",
+      "First group should keep its own latest top-post snapshot."
+    );
+    assertEqual(
+      hooks.getLatestTopPostForGroup(OTHER_GROUP_ID).author,
+      "Bob",
+      "Second group should keep its own latest top-post snapshot."
+    );
+    assertEqual(
+      hooks.getLatestScanPostsForGroup(TEST_GROUP_ID)[0].author,
+      "Alice",
+      "First group should keep its own latest-scan cache."
+    );
+    assertEqual(
+      hooks.getLatestScanPostsForGroup(OTHER_GROUP_ID)[0].author,
+      "Bob",
+      "Second group should keep its own latest-scan cache."
     );
   });
 
@@ -1191,9 +1482,10 @@ function runRuntimeStateTests(hooks) {
 function runTests(hooks, context) {
   runCoreBehaviorTests(hooks);
   runConfigAndLayoutTests(hooks);
+  runGroupScopedConfigTests(hooks, context);
   runPermalinkHelperTests(hooks);
   runPostIdExtractionTests(hooks, context);
-  runIdentityAndStoreTests(hooks);
+  runIdentityAndStoreTests(hooks, context);
   runPresentationTests(hooks);
   runRuntimeStateTests(hooks);
 }

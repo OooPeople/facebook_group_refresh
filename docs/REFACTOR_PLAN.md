@@ -413,7 +413,7 @@
 - review2 中仍然合理、而且值得持續注意的部分：
   - `STATE` 仍偏胖，雖然已從結構風險降到可接受的單檔 userscript 取捨，但後續新增功能時仍要避免再次擴散寫入點
   - `開始 / 暫停` 的語義不能只當成 UI toggle，必須明確區分 pause 與 restart；目前已開始朝這個方向收口
-  - `seenPosts` 目前只保留當前社團 bucket，這是刻意設計，不是 accidental drift，但文件需要明寫其 tradeoff
+  - `seenPosts` 現在已改成保留多個社團 bucket；後續若再擴充 state，仍要避免讓不同 bucket 的生命週期規則再次分裂
   - maintenance loop 屬於 Facebook SPA 下的現實折衷，應視為 policy 層選擇，而不是隨機散落的 workaround
   - smoke test 應逐步從 matcher 擴大到控制語義與 policy 層，避免未來重構只剩人工回歸
 - review2 中部分合理，但優先度已下降的部分：

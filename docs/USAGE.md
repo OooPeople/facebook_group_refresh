@@ -238,8 +238,14 @@ https://www.facebook.com/groups/<group-id>/
 
 ### seen 與 history
 
-- seen-post dedupe 目前只保留「當前社團」的 bucket
+- seen-post dedupe 會依社團 ID 分 bucket 保存，可同時支援多個社團視窗
 - 通知 history 則是全域清單，保留最近 10 筆
+
+### 多社團視窗
+
+- include / exclude 關鍵字、通知端點、刷新設定、暫停狀態與 dedupe 都會依目前社團 ID 保存
+- 你可以同時開多個不同社團視窗，各自維持自己的設定與已看過貼文狀態
+- 第一次升級到這個版本時，舊版全域設定會在首次讀取某個社團時搬進該社團 bucket
 
 ## 已知限制
 
@@ -260,3 +266,4 @@ https://www.facebook.com/groups/<group-id>/
 4. 測試通知可正常送出
 5. debug 面板能看到掃描摘要
 6. 符合條件的新貼文不會被重複通知
+7. 若同時開兩個不同社團視窗，兩邊的關鍵字與掃描結果不會互相覆蓋

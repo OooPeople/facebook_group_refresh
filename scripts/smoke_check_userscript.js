@@ -11,6 +11,12 @@ const TEST_POST_ID = "9876543210123456";
 const TEST_GROUP_POST_URL = `https://www.facebook.com/groups/${TEST_GROUP_ID}/posts/${TEST_POST_ID}`;
 const TEST_PHOTO_GM_HREF =
   `https://www.facebook.com/photo/?fbid=1234567890&set=gm.${TEST_POST_ID}&idorvanity=${TEST_GROUP_ID}`;
+const PER_GROUP_KEY_PREFIXES = Object.freeze({
+  groupConfigs: "fb_group_refresh_group_configs:",
+  seenPosts: "fb_group_refresh_seen_posts:",
+  latestTopPosts: "fb_group_refresh_latest_top_posts:",
+  latestScanPosts: "fb_group_refresh_latest_scan_posts:",
+});
 const PERMALINK_ANCHOR_SELECTOR =
   'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]';
 
@@ -537,6 +543,18 @@ function runConfigAndLayoutTests(hooks) {
   });
 }
 
+function buildPerGroupStorageKey(storeName, groupId) {
+  return `${PER_GROUP_KEY_PREFIXES[storeName]}${groupId}`;
+}
+
+function clearPerGroupStorage(context, storeNames, groupIds = [TEST_GROUP_ID, OTHER_GROUP_ID]) {
+  storeNames.forEach((storeName) => {
+    groupIds.forEach((groupId) => {
+      context.GM_deleteValue(buildPerGroupStorageKey(storeName, groupId));
+    });
+  });
+}
+
 function clearConfigStorage(context) {
   [
     "fb_group_refresh_include",
@@ -549,6 +567,7 @@ function clearConfigStorage(context) {
     "fb_group_refresh_refresh_range",
     "fb_group_refresh_group_configs",
   ].forEach((key) => context.GM_deleteValue(key));
+  clearPerGroupStorage(context, ["groupConfigs"]);
 }
 
 function clearGroupStateStorage(context) {
@@ -557,38 +576,40 @@ function clearGroupStateStorage(context) {
     "fb_group_refresh_latest_top_posts",
     "fb_group_refresh_latest_scan_posts",
   ].forEach((key) => context.GM_deleteValue(key));
+  clearPerGroupStorage(context, ["seenPosts", "latestTopPosts", "latestScanPosts"]);
 }
 
 function runGroupScopedConfigTests(hooks, context) {
-  runTest("group-scoped config loading keeps groups isolated", () => {
+  runTest("group-scoped config loading uses isolated per-group storage keys", () => {
     clearConfigStorage(context);
     context.GM_setValue(
-      "fb_group_refresh_group_configs",
+      buildPerGroupStorageKey("groupConfigs", TEST_GROUP_ID),
       JSON.stringify({
-        [TEST_GROUP_ID]: {
-          includeKeywords: "alpha only",
-          excludeKeywords: "sold",
-          ntfyTopic: "topic-a",
-          paused: false,
-          autoLoadMorePosts: false,
-          minRefreshSec: 12,
-          maxRefreshSec: 18,
-          jitterEnabled: true,
-          fixedRefreshSec: 45,
-          maxPostsPerScan: 4,
-        },
-        [OTHER_GROUP_ID]: {
-          includeKeywords: "beta only",
-          excludeKeywords: "taken",
-          ntfyTopic: "topic-b",
-          paused: true,
-          autoLoadMorePosts: true,
-          minRefreshSec: 30,
-          maxRefreshSec: 40,
-          jitterEnabled: false,
-          fixedRefreshSec: 55,
-          maxPostsPerScan: 7,
-        },
+        includeKeywords: "alpha only",
+        excludeKeywords: "sold",
+        ntfyTopic: "topic-a",
+        paused: false,
+        autoLoadMorePosts: false,
+        minRefreshSec: 12,
+        maxRefreshSec: 18,
+        jitterEnabled: true,
+        fixedRefreshSec: 45,
+        maxPostsPerScan: 4,
+      })
+    );
+    context.GM_setValue(
+      buildPerGroupStorageKey("groupConfigs", OTHER_GROUP_ID),
+      JSON.stringify({
+        includeKeywords: "beta only",
+        excludeKeywords: "taken",
+        ntfyTopic: "topic-b",
+        paused: true,
+        autoLoadMorePosts: true,
+        minRefreshSec: 30,
+        maxRefreshSec: 40,
+        jitterEnabled: false,
+        fixedRefreshSec: 55,
+        maxPostsPerScan: 7,
       })
     );
 
@@ -614,6 +635,11 @@ function runGroupScopedConfigTests(hooks, context) {
     assertEqual(secondGroupConfig.jitterEnabled, false, "Second group should load its own jitter flag.");
     assertEqual(secondGroupConfig.fixedRefreshSec, 55, "Second group should load its own fixed refresh.");
     assertEqual(secondGroupConfig.maxPostsPerScan, 7, "Second group should load its own scan target.");
+    assertEqual(
+      context.GM_getValue("fb_group_refresh_group_configs", null),
+      null,
+      "Per-group config loading should not require the legacy shared config store."
+    );
   });
 
   runTest("legacy global config migrates into the first requested group bucket", () => {
@@ -652,21 +678,56 @@ function runGroupScopedConfigTests(hooks, context) {
     assertEqual(migratedBucket.paused, false, "Migrated bucket should persist the paused flag.");
     assertEqual(migratedBucket.minRefreshSec, 22, "Migrated bucket should persist refresh settings.");
     assertEqual(migratedBucket.maxPostsPerScan, 6, "Migrated bucket should persist scan target settings.");
+    assertDeepEqual(
+      JSON.parse(context.GM_getValue(buildPerGroupStorageKey("groupConfigs", TEST_GROUP_ID), "{}")),
+      migratedBucket,
+      "Legacy global config migration should persist into the new per-group config key."
+    );
   });
 
-  runTest("reloadCurrentGroupConfig follows the current route group id", () => {
+  runTest("legacy shared group config bucket migrates into per-group storage", () => {
     clearConfigStorage(context);
     context.GM_setValue(
       "fb_group_refresh_group_configs",
       JSON.stringify({
         [TEST_GROUP_ID]: {
-          includeKeywords: "route alpha",
-          ntfyTopic: "route-topic-a",
+          includeKeywords: "legacy shared alpha",
+          ntfyTopic: "legacy-shared-topic",
         },
-        [OTHER_GROUP_ID]: {
-          includeKeywords: "route beta",
-          ntfyTopic: "route-topic-b",
-        },
+      })
+    );
+
+    const migratedConfig = hooks.loadConfigForGroup(TEST_GROUP_ID);
+
+    assertEqual(
+      migratedConfig.includeKeywords,
+      "legacy shared alpha",
+      "Legacy shared config store should still hydrate the requested group."
+    );
+    assertDeepEqual(
+      JSON.parse(context.GM_getValue(buildPerGroupStorageKey("groupConfigs", TEST_GROUP_ID), "{}")),
+      {
+        includeKeywords: "legacy shared alpha",
+        ntfyTopic: "legacy-shared-topic",
+      },
+      "Legacy shared config buckets should migrate into per-group config keys."
+    );
+  });
+
+  runTest("reloadCurrentGroupConfig follows the current route group id", () => {
+    clearConfigStorage(context);
+    context.GM_setValue(
+      buildPerGroupStorageKey("groupConfigs", TEST_GROUP_ID),
+      JSON.stringify({
+        includeKeywords: "route alpha",
+        ntfyTopic: "route-topic-a",
+      })
+    );
+    context.GM_setValue(
+      buildPerGroupStorageKey("groupConfigs", OTHER_GROUP_ID),
+      JSON.stringify({
+        includeKeywords: "route beta",
+        ntfyTopic: "route-topic-b",
       })
     );
 
@@ -1148,6 +1209,20 @@ function runIdentityAndStoreTests(hooks, context) {
     hooks.markPostSeen(TEST_GROUP_ID, firstGroupPost);
     hooks.markPostSeen(OTHER_GROUP_ID, secondGroupPost);
 
+    assert(
+      typeof context.GM_getValue(buildPerGroupStorageKey("seenPosts", TEST_GROUP_ID), null) === "string",
+      "Seen-post state should persist to the first group's dedicated storage key."
+    );
+    assert(
+      typeof context.GM_getValue(buildPerGroupStorageKey("seenPosts", OTHER_GROUP_ID), null) === "string",
+      "Seen-post state should persist to the second group's dedicated storage key."
+    );
+    assertEqual(
+      context.GM_getValue("fb_group_refresh_seen_posts", null),
+      null,
+      "Seen-post state should no longer be written to the legacy shared store."
+    );
+
     assertEqual(
       hooks.hasSeenPost(TEST_GROUP_ID, firstGroupPost),
       true,
@@ -1176,6 +1251,38 @@ function runIdentityAndStoreTests(hooks, context) {
       true,
       "Clearing one group should not remove other groups' seen state."
     );
+    assertEqual(
+      context.GM_getValue(buildPerGroupStorageKey("seenPosts", TEST_GROUP_ID), null),
+      null,
+      "Clearing one group should remove that group's dedicated seen-post key."
+    );
+  });
+
+  runTest("legacy shared seen-post store migrates into per-group storage", () => {
+    clearGroupStateStorage(context);
+    context.GM_setValue(
+      "fb_group_refresh_seen_posts",
+      JSON.stringify({
+        [TEST_GROUP_ID]: {
+          "id:9876543210123456": "2026-04-10T00:00:00.000Z",
+        },
+      })
+    );
+
+    const migratedStore = hooks.getSeenPostGroupStore(TEST_GROUP_ID);
+
+    assertDeepEqual(
+      migratedStore,
+      {
+        "id:9876543210123456": "2026-04-10T00:00:00.000Z",
+      },
+      "Legacy shared seen-post buckets should still load for the requested group."
+    );
+    assertDeepEqual(
+      JSON.parse(context.GM_getValue(buildPerGroupStorageKey("seenPosts", TEST_GROUP_ID), "{}")),
+      migratedStore,
+      "Legacy shared seen-post buckets should migrate into dedicated per-group keys."
+    );
   });
 
   runTest("top-post and latest-scan caches stay isolated per group", () => {
@@ -1200,6 +1307,25 @@ function runIdentityAndStoreTests(hooks, context) {
     hooks.setLatestScanPostsForGroup(TEST_GROUP_ID, firstScanPosts);
     hooks.setLatestScanPostsForGroup(OTHER_GROUP_ID, secondScanPosts);
 
+    assert(
+      typeof context.GM_getValue(buildPerGroupStorageKey("latestTopPosts", TEST_GROUP_ID), null) === "string",
+      "Latest top-post snapshots should persist to dedicated per-group keys."
+    );
+    assert(
+      typeof context.GM_getValue(buildPerGroupStorageKey("latestScanPosts", OTHER_GROUP_ID), null) === "string",
+      "Latest-scan caches should persist to dedicated per-group keys."
+    );
+    assertEqual(
+      context.GM_getValue("fb_group_refresh_latest_top_posts", null),
+      null,
+      "Latest top-post snapshots should no longer use the legacy shared store."
+    );
+    assertEqual(
+      context.GM_getValue("fb_group_refresh_latest_scan_posts", null),
+      null,
+      "Latest-scan caches should no longer use the legacy shared store."
+    );
+
     assertEqual(
       hooks.getLatestTopPostForGroup(TEST_GROUP_ID).author,
       "Alice",
@@ -1219,6 +1345,58 @@ function runIdentityAndStoreTests(hooks, context) {
       hooks.getLatestScanPostsForGroup(OTHER_GROUP_ID)[0].author,
       "Bob",
       "Second group should keep its own latest-scan cache."
+    );
+  });
+
+  runTest("legacy shared top-post and latest-scan caches migrate into per-group storage", () => {
+    clearGroupStateStorage(context);
+    const legacyTopPost = {
+      keys: ["id:9876543210123456"],
+      postId: "9876543210123456",
+      permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+      author: "Alice",
+      text: "Alpha ticket available",
+    };
+    const legacyLatestScan = [
+      {
+        postId: "9876543210123456",
+        permalink: "https://www.facebook.com/groups/123456789012345/posts/9876543210123456",
+        author: "Alice",
+        text: "Alpha ticket available",
+      },
+    ];
+    context.GM_setValue(
+      "fb_group_refresh_latest_top_posts",
+      JSON.stringify({
+        [TEST_GROUP_ID]: legacyTopPost,
+      })
+    );
+    context.GM_setValue(
+      "fb_group_refresh_latest_scan_posts",
+      JSON.stringify({
+        [TEST_GROUP_ID]: legacyLatestScan,
+      })
+    );
+
+    assertEqual(
+      hooks.getLatestTopPostForGroup(TEST_GROUP_ID).author,
+      "Alice",
+      "Legacy shared top-post snapshots should still load for the requested group."
+    );
+    assertEqual(
+      hooks.getLatestScanPostsForGroup(TEST_GROUP_ID)[0].author,
+      "Alice",
+      "Legacy shared latest-scan caches should still load for the requested group."
+    );
+    assertDeepEqual(
+      JSON.parse(context.GM_getValue(buildPerGroupStorageKey("latestTopPosts", TEST_GROUP_ID), "{}")),
+      legacyTopPost,
+      "Legacy shared top-post snapshots should migrate into dedicated per-group keys."
+    );
+    assertDeepEqual(
+      JSON.parse(context.GM_getValue(buildPerGroupStorageKey("latestScanPosts", TEST_GROUP_ID), "[]")),
+      legacyLatestScan,
+      "Legacy shared latest-scan caches should migrate into dedicated per-group keys."
     );
   });
 

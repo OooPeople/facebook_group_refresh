@@ -50,6 +50,12 @@
     panelPosition: { key: STORAGE_KEYS.panelPosition, type: "json" },
     groupConfigs: { key: STORAGE_KEYS.groupConfigs, type: "object" },
   });
+  const PER_GROUP_STORE_DEFINITIONS = Object.freeze({
+    groupConfigs: { keyPrefix: `${STORAGE_KEYS.groupConfigs}:` },
+    latestTopPosts: { keyPrefix: `${STORAGE_KEYS.latestTopPosts}:` },
+    latestScanPosts: { keyPrefix: `${STORAGE_KEYS.latestScanPosts}:` },
+    seenPosts: { keyPrefix: `${STORAGE_KEYS.seenPosts}:` },
+  });
   const CONFIG_FIELD_DEFINITIONS = Object.freeze({
     includeKeywords: { key: STORAGE_KEYS.include, type: "string", normalize: true },
     excludeKeywords: { key: STORAGE_KEYS.exclude, type: "string", normalize: true },
@@ -280,26 +286,32 @@
     Object.assign(STATE.config, patch || {});
   }
 
+  // 對 scan runtime 區塊套用淺層 patch。
   function setScanRuntimePatch(patch) {
     Object.assign(STATE.scanRuntime, patch || {});
   }
 
+  // 對 notification runtime 區塊套用淺層 patch。
   function setNotificationRuntimePatch(patch) {
     Object.assign(STATE.notificationRuntime, patch || {});
   }
 
+  // 對 route runtime 區塊套用淺層 patch。
   function setRouteRuntimePatch(patch) {
     Object.assign(STATE.routeRuntime, patch || {});
   }
 
+  // 對 UI runtime 區塊套用淺層 patch。
   function setUiRuntimePatch(patch) {
     Object.assign(STATE.uiRuntime, patch || {});
   }
 
+  // 對 scheduler runtime 區塊套用淺層 patch。
   function setSchedulerRuntimePatch(patch) {
     Object.assign(STATE.schedulerRuntime, patch || {});
   }
 
+  // 對 session runtime 區塊套用淺層 patch。
   function setSessionRuntimePatch(patch) {
     Object.assign(STATE.sessionRuntime, patch || {});
   }
@@ -434,10 +446,12 @@
     return CONFIG_FIELD_DEFINITIONS[name] || null;
   }
 
+  // 判斷某個 config group 是否要依社團 ID 分開保存。
   function isGroupScopedConfigGroup(groupName) {
     return GROUP_SCOPED_CONFIG_GROUPS.includes(groupName);
   }
 
+  // 判斷某個 config field 是否屬於 group-scoped 設定。
   function isGroupScopedConfigField(name) {
     return Object.entries(CONFIG_GROUP_DEFINITIONS).some(([groupName, fields]) => {
       return isGroupScopedConfigGroup(groupName) && fields.includes(name);
@@ -449,16 +463,20 @@
     return CONFIG_GROUP_DEFINITIONS[groupName] || [];
   }
 
-  function getGroupConfigStore() {
-    return loadNamedObjectStore("groupConfigs");
-  }
-
-  function setGroupConfigStore(store) {
-    saveNamedObjectStore("groupConfigs", store);
-  }
-
+  // 僅從每社團獨立 key 讀取該社團的 config bucket。
   function readStoredGroupConfigBucket(groupId) {
-    return getNamedGroupObjectValue(
+    return loadNamedPerGroupStoreValue(
+      "groupConfigs",
+      groupId,
+      {},
+      (value) => value && typeof value === "object" && !Array.isArray(value),
+      { migrateLegacy: false }
+    );
+  }
+
+  // 從舊版共用 group-config store 讀取單一社團的 bucket。
+  function readLegacySharedGroupConfigBucket(groupId) {
+    return getLegacyNamedGroupStoreValue(
       "groupConfigs",
       groupId,
       {},
@@ -466,6 +484,7 @@
     );
   }
 
+  // 將原始 group-config bucket 正規化成目前支援的持久化結構。
   function normalizeGroupConfigBucket(bucket, baseConfig = DEFAULT_CONFIG) {
     const source = bucket && typeof bucket === "object" && !Array.isArray(bucket)
       ? bucket
@@ -479,19 +498,21 @@
     };
   }
 
+  // 讀取並正規化單一社團目前保存的 config bucket。
   function getGroupConfigBucket(groupId, baseConfig = DEFAULT_CONFIG) {
     return normalizeGroupConfigBucket(readStoredGroupConfigBucket(groupId), baseConfig);
   }
 
+  // 將單一社團正規化後的 config bucket 寫回獨立 storage key。
   function setGroupConfigBucket(groupId, bucket, baseConfig = DEFAULT_CONFIG) {
     if (!groupId) return {};
 
-    const store = getGroupConfigStore();
-    store[groupId] = normalizeGroupConfigBucket(bucket, baseConfig);
-    setGroupConfigStore(store);
-    return store[groupId];
+    const normalizedBucket = normalizeGroupConfigBucket(bucket, baseConfig);
+    saveNamedPerGroupStoreValue("groupConfigs", groupId, normalizedBucket);
+    return normalizedBucket;
   }
 
+  // 判斷是否仍存在需要搬移的舊版全域設定 key。
   function hasLegacyGroupScopedConfigData() {
     return [
       STORAGE_KEYS.include,
@@ -517,6 +538,7 @@
     return definition.normalize ? normalizeText(value) : value;
   }
 
+  // 從舊版扁平 storage key 載入一整組 config。
   function loadLegacyPersistedConfigGroup(groupName, baseConfig = DEFAULT_CONFIG) {
     const patch = {};
 
@@ -527,6 +549,7 @@
     return patch;
   }
 
+  // 從舊版 refresh payload 載入 refresh 設定。
   function loadLegacyRefreshConfigOverrides(baseConfig = DEFAULT_CONFIG) {
     const refreshRange = loadJson(STORAGE_KEYS.refreshRange, null);
     return {
@@ -542,6 +565,7 @@
     };
   }
 
+  // 將舊版全域設定欄位組成可遷移的 group config bucket。
   function buildLegacyGroupConfigMigrationPatch(baseConfig = DEFAULT_CONFIG) {
     return {
       ...loadLegacyPersistedConfigGroup("keyword", baseConfig),
@@ -551,6 +575,7 @@
     };
   }
 
+  // 確保某社團的 config bucket 已存在，必要時執行舊資料搬移。
   function ensureGroupConfigBucketMigrated(groupId, baseConfig = DEFAULT_CONFIG) {
     const normalizedGroupId = String(groupId || "");
     if (!normalizedGroupId) {
@@ -561,6 +586,12 @@
     if (Object.keys(existingBucket).length) {
       return existingBucket;
     }
+
+    const legacySharedBucket = readLegacySharedGroupConfigBucket(normalizedGroupId);
+    if (Object.keys(legacySharedBucket).length) {
+      return setGroupConfigBucket(normalizedGroupId, legacySharedBucket, baseConfig);
+    }
+
     if (!hasLegacyGroupScopedConfigData()) {
       return existingBucket;
     }
@@ -572,11 +603,13 @@
     );
   }
 
+  // 取得已完成 migration 的有效 group config bucket。
   function getEffectiveGroupConfigBucket(groupId, baseConfig = DEFAULT_CONFIG) {
     ensureGroupConfigBucketMigrated(groupId, baseConfig);
     return getGroupConfigBucket(groupId, baseConfig);
   }
 
+  // 從正規化後的 group config bucket 取出 refresh 相關設定。
   function buildRefreshConfigFromGroupBucket(groupBucket, baseConfig = DEFAULT_CONFIG) {
     return {
       minRefreshSec: groupBucket.minRefreshSec ?? baseConfig.minRefreshSec,
@@ -730,10 +763,12 @@
     };
   }
 
+  // 載入目前路由所屬社團的完整有效設定。
   function loadConfig() {
     return loadConfigForGroup(getCurrentGroupId());
   }
 
+  // 重新將目前路由社團的設定回填到 STATE.config。
   function reloadCurrentGroupConfig() {
     const nextConfig = loadConfigForGroup(getCurrentGroupId());
     setConfigPatch(nextConfig);
@@ -790,6 +825,99 @@
   // 讀取命名 store 定義，避免各區塊散落硬編碼 storage key。
   function getStoreDefinition(name) {
     return STORE_DEFINITIONS[name] || null;
+  }
+
+  // 取得採用每社團實體 key 之 store 的定義資料。
+  function getPerGroupStoreDefinition(name) {
+    return PER_GROUP_STORE_DEFINITIONS[name] || null;
+  }
+
+  // 判斷某個 store 是否採用每社團一個 key 的保存方式。
+  function isPerGroupStore(name) {
+    return Boolean(getPerGroupStoreDefinition(name));
+  }
+
+  // 建立某個 store 在特定社團下的實際 storage key。
+  function buildPerGroupStoreKey(name, groupId) {
+    const definition = getPerGroupStoreDefinition(name);
+    const normalizedGroupId = String(groupId || "").trim();
+    if (!definition || !normalizedGroupId) return "";
+    return `${definition.keyPrefix}${normalizedGroupId}`;
+  }
+
+  // 僅在 key 存在時讀取 JSON，保留不存在與格式錯誤的差異。
+  function loadJsonValueIfPresent(key) {
+    const raw = loadStoredRawValue(key);
+    if (raw == null) {
+      return {
+        found: false,
+        value: undefined,
+      };
+    }
+
+    try {
+      return {
+        found: true,
+        value: JSON.parse(raw),
+      };
+    } catch (error) {
+      return {
+        found: true,
+        value: undefined,
+      };
+    }
+  }
+
+  // 從舊版共用 object store 讀取指定社團 bucket。
+  function getLegacyNamedGroupStoreValue(storeName, groupId, fallback, isValid) {
+    return getGroupStoreValue(loadNamedObjectStore(storeName), groupId, fallback, isValid);
+  }
+
+  // 從每社團 store 讀取單一群組資料，必要時順手搬移舊版 shared bucket。
+  function loadNamedPerGroupStoreValue(storeName, groupId, fallback, isValid, options = {}) {
+    const normalizedGroupId = String(groupId || "").trim();
+    const perGroupKey = buildPerGroupStoreKey(storeName, normalizedGroupId);
+    if (!perGroupKey) return fallback;
+
+    const { migrateLegacy = true } = options;
+    const currentValue = loadJsonValueIfPresent(perGroupKey);
+    if (currentValue.found) {
+      return isValid(currentValue.value) ? currentValue.value : fallback;
+    }
+
+    if (!migrateLegacy) {
+      return fallback;
+    }
+
+    const legacyValue = getLegacyNamedGroupStoreValue(
+      storeName,
+      normalizedGroupId,
+      fallback,
+      isValid
+    );
+    if (!isValid(legacyValue)) {
+      return fallback;
+    }
+
+    saveNamedPerGroupStoreValue(storeName, normalizedGroupId, legacyValue);
+    return legacyValue;
+  }
+
+  // 將單一社團資料寫入獨立 key，空 object bucket 會直接刪除。
+  function saveNamedPerGroupStoreValue(storeName, groupId, value) {
+    const normalizedGroupId = String(groupId || "").trim();
+    const perGroupKey = buildPerGroupStoreKey(storeName, normalizedGroupId);
+    if (!perGroupKey) return;
+
+    if (
+      value == null ||
+      (value && typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length)
+    ) {
+      removeStorageKey(perGroupKey);
+      return;
+    }
+
+    saveJson(perGroupKey, value);
   }
 
   // 讀取 object 型 store；缺值或型別不符時回退為空物件。
@@ -1843,6 +1971,7 @@
     return rect.bottom >= -upperThreshold && rect.top <= lowerThreshold;
   }
 
+  // 判斷某個節點是否位於候選容器的上半部區域。
   function isElementInContainerUpperRegion(element, container, options = {}) {
     if (!(element instanceof HTMLElement) || !(container instanceof HTMLElement)) return false;
 
@@ -2037,7 +2166,7 @@
     return results.slice(0, limit);
   }
 
-  // Permalink / postId extraction helpers.
+  // permalink / postId 抽取輔助函式。
   // 這段維持在 extractor 層，避免把 DOM 預熱、URL 正規化與 debug 診斷滲進 scan orchestration。
   function buildCanonicalGroupPostUrl(groupId, postId) {
     const normalizedGroupId = String(groupId || "").trim();
@@ -2046,6 +2175,7 @@
     return `https://www.facebook.com/groups/${normalizedGroupId}/posts/${normalizedPostId}`;
   }
 
+  // 將輸入值解析成可接受的 Facebook URL 物件。
   function normalizeFacebookUrl(value) {
     const text = String(value || "").trim();
     if (!text) return null;
@@ -2061,6 +2191,7 @@
     }
   }
 
+  // 建立 permalink 抽取結果的固定資料結構。
   function buildPermalinkDetails(permalink = "", source = "unavailable") {
     return {
       permalink: String(permalink || ""),
@@ -2068,6 +2199,7 @@
     };
   }
 
+  // 僅在 groupId 符合預期時組出 canonical group-post permalink。
   function buildGroupScopedPermalinkDetails(groupId, postId, source, expectedGroupId = "") {
     const normalizedGroupId = String(groupId || "").trim();
     const normalizedPostId = String(postId || "").trim();
@@ -2082,6 +2214,7 @@
     return permalink ? buildPermalinkDetails(permalink, source) : buildPermalinkDetails("", "");
   }
 
+  // 從 group route 的 query 參數中抽出 post id。
   function extractGroupRouteQueryPostId(url) {
     if (!(url instanceof URL)) return "";
 
@@ -2098,6 +2231,7 @@
     );
   }
 
+  // 從 photo route 的 query 參數中推回所屬 group id。
   function extractPhotoRouteGroupId(url, expectedGroupId = "") {
     if (!(url instanceof URL)) return "";
 
@@ -2120,6 +2254,7 @@
     return groupId;
   }
 
+  // 將 photo route 正規化回對應的 group post permalink。
   function extractPhotoRoutePermalinkDetails(url, expectedGroupId = "") {
     if (!(url instanceof URL)) {
       return buildPermalinkDetails("", "");
@@ -2133,7 +2268,7 @@
     );
   }
 
-  // Permalink URL normalization.
+  // permalink URL 正規化。
   function getPermalinkSourcePriority(source = "") {
     if (source === "groups_post_anchor") return 0;
     if (source === "group_permalink_anchor") return 1;
@@ -2143,6 +2278,7 @@
     return 5;
   }
 
+  // 判斷 href 是否為 comment-level permalink。
   function isCommentPermalinkHref(value) {
     const url = normalizeFacebookUrl(value);
     if (!url) return false;
@@ -2153,6 +2289,7 @@
     );
   }
 
+  // 將支援的 Facebook href 變體正規化成 canonical group-post permalink。
   function extractCanonicalPermalinkFromHref(value, expectedGroupId = "") {
     const url = normalizeFacebookUrl(value);
     if (!url) {
@@ -2221,6 +2358,7 @@
     );
   }
 
+  // 過濾明顯屬於個人檔案而非貼文的連結。
   function isLikelyUserProfileHref(value) {
     const url = normalizeFacebookUrl(value);
     if (!url) return false;
@@ -2236,6 +2374,7 @@
     return false;
   }
 
+  // 向上尋找某個節點所屬的直接 feed child 容器。
   function findFeedChildContainer(node) {
     if (!(node instanceof HTMLElement)) return null;
 
@@ -2253,6 +2392,7 @@
     return null;
   }
 
+  // 從指定 scope 收集唯一 anchor，並套用必要的過濾條件。
   function collectAnchorsFromScope(scopeNode, selector = "a[href]", options = {}) {
     if (!(scopeNode instanceof HTMLElement)) return [];
 
@@ -2281,6 +2421,7 @@
     return anchors;
   }
 
+  // 收集並排序 scope 內可用的 canonical permalink 候選。
   function collectCanonicalPermalinkCandidates(scopeNode, expectedGroupId = "", options = {}) {
     if (!(scopeNode instanceof HTMLElement)) return [];
 
@@ -2322,7 +2463,7 @@
     return candidates;
   }
 
-  // Permalink anchor warmup.
+  // permalink anchor warmup。
   function isLikelyTimestampAnchorText(value) {
     const text = normalizeText(value);
     if (!text) return false;
@@ -2336,6 +2477,7 @@
     );
   }
 
+  // 判斷某個 href 是否屬於不值得做 warmup 的工具型連結。
   function isLikelyWarmupUtilityHref(value, expectedGroupId = "") {
     const url = normalizeFacebookUrl(value);
     if (!url) return true;
@@ -2354,6 +2496,7 @@
     return false;
   }
 
+  // 選出最值得做 warmup 的上半部 anchor 候選。
   function collectPermalinkWarmupAnchors(container, expectedGroupId = getCurrentGroupId(), limit = 4) {
     if (!(container instanceof HTMLElement)) return [];
 
@@ -2416,6 +2559,7 @@
     return anchors.slice(0, limit);
   }
 
+  // 觸發最小必要的 hover/focus 事件，讓 Facebook 補齊延遲生成的 href。
   function dispatchPermalinkWarmupEvents(anchor) {
     if (!(anchor instanceof HTMLElement)) return;
 
@@ -2431,14 +2575,14 @@
       anchor.dispatchEvent(new MouseEvent("mouseover", eventInit));
       anchor.dispatchEvent(new MouseEvent("mousemove", eventInit));
     } catch (error) {
-      // Ignore event creation failures and continue with focus fallback.
+      // 忽略事件建立失敗，改走 focus fallback。
     }
 
     try {
       anchor.dispatchEvent(new PointerEvent("pointerenter", eventInit));
       anchor.dispatchEvent(new PointerEvent("pointerover", eventInit));
     } catch (error) {
-      // PointerEvent is not always available in every userscript runtime.
+      // 某些 userscript 執行環境未必支援 PointerEvent。
     }
 
     try {
@@ -2447,11 +2591,12 @@
       try {
         anchor.focus();
       } catch (focusError) {
-        // Ignore focus failures.
+        // 忽略 focus 失敗。
       }
     }
   }
 
+  // 建立 permalink warmup 的固定診斷狀態。
   function buildPermalinkWarmupState({
     warmupAttempted = false,
     warmupResolved = false,
@@ -2508,7 +2653,7 @@
     });
   }
 
-  // Permalink scope resolution.
+  // permalink scope 解析。
   function findPermalinkAnchorDrivenPostElement(node, expectedGroupId = getCurrentGroupId()) {
     if (!(node instanceof HTMLElement)) return null;
 
@@ -2527,6 +2672,7 @@
     return findFeedChildContainer(primaryCandidate.anchor);
   }
 
+  // 列出當前容器附近值得檢查 permalink 的 scope。
   function collectPermalinkSearchScopes(container) {
     if (!(container instanceof HTMLElement)) return [];
 
@@ -2574,6 +2720,7 @@
     return scopes;
   }
 
+  // 解析單一貼文容器可取得的最佳 permalink 與其來源。
   function extractPermalinkDetails(container) {
     if (!(container instanceof HTMLElement)) {
       return {
@@ -2640,6 +2787,7 @@
     );
   }
 
+  // 只從 metadata 類型字串中抽取 post id。
   function extractMetadataPostIdFromValue(value) {
     const text = String(value || "");
     if (!text) return "";
@@ -2647,6 +2795,7 @@
     return extractFirstPatternMatch([text], REGEX_PATTERNS.metadataPostId);
   }
 
+  // 收集容器內所有可能內嵌 post id 的原始字串來源。
   function collectPostIdSourceValues(permalink, container) {
     const values = [String(permalink || "")];
     if (!(container instanceof HTMLElement)) return values;
@@ -2737,6 +2886,7 @@
     }) || "";
   }
 
+  // 判斷文字尾端是否帶有留言操作列痕跡。
   function hasCommentActionTrail(value) {
     const text = normalizeText(value);
     if (!text) return false;
@@ -2744,6 +2894,7 @@
     return REGEX_PATTERNS.commentActionTrail.some((pattern) => pattern.test(text));
   }
 
+  // 移除文字尾端已知的留言操作列片段。
   function stripCommentActionTrail(value) {
     let text = String(value || "");
     if (!text) return "";
@@ -2933,12 +3084,22 @@
 
   // 讀取命名 object store 中的指定 group bucket。
   function getNamedGroupObjectValue(storeName, groupId, fallback, isValid) {
+    if (isPerGroupStore(storeName)) {
+      return loadNamedPerGroupStoreValue(storeName, groupId, fallback, isValid);
+    }
+
     return getGroupStoreValue(loadNamedObjectStore(storeName), groupId, fallback, isValid);
   }
 
   // 將單一群組資料寫回命名 object store。
   function setNamedGroupObjectValue(storeName, groupId, value) {
     if (!groupId) return;
+
+    if (isPerGroupStore(storeName)) {
+      saveNamedPerGroupStoreValue(storeName, groupId, value);
+      return;
+    }
+
     const store = loadNamedObjectStore(storeName);
     store[groupId] = value;
     saveNamedObjectStore(storeName, store);
@@ -3128,16 +3289,6 @@
     return collectUniquePostsByKey(posts, limit);
   }
 
-  // 讀取「已看過貼文」儲存區。
-  function getSeenPostsStore() {
-    return loadNamedObjectStore("seenPosts");
-  }
-
-  // 寫回「已看過貼文」儲存區。
-  function setSeenPostsStore(store) {
-    saveNamedObjectStore("seenPosts", store);
-  }
-
   // 檢查某篇貼文是否已看過，支援直接傳 key 或傳入完整 post 物件。
   function hasSeenPost(groupId, postKey) {
     const groupStore = getSeenPostGroupStore(groupId);
@@ -3160,41 +3311,28 @@
     return Object.fromEntries(entries.slice(0, limit));
   }
 
-  // 建立更新後的 seen-post store，只替換指定群組 bucket，保留其他群組資料。
-  function buildSeenPostsStoreForGroup(groupId, groupStore, store = getSeenPostsStore()) {
-    const normalizedGroupId = String(groupId || "");
-    if (!normalizedGroupId) {
-      return store && typeof store === "object" ? store : {};
-    }
-
-    const nextStore = store && typeof store === "object" ? { ...store } : {};
-    const normalizedGroupStore = groupStore && typeof groupStore === "object"
-      ? groupStore
-      : {};
-
-    if (Object.keys(normalizedGroupStore).length) {
-      nextStore[normalizedGroupId] = normalizedGroupStore;
-    } else {
-      delete nextStore[normalizedGroupId];
-    }
-
-    return nextStore;
-  }
-
   // 讀取指定群組的 seen-post bucket；格式不符時回退為空物件。
-  function getSeenPostGroupStore(groupId, store = getSeenPostsStore()) {
+  function getSeenPostGroupStore(groupId) {
     const normalizedGroupId = String(groupId || "");
     if (!normalizedGroupId) {
       return {};
     }
 
-    const groupStore = store?.[normalizedGroupId];
-    return groupStore && typeof groupStore === "object" ? groupStore : {};
+    return getNamedGroupObjectValue(
+      "seenPosts",
+      normalizedGroupId,
+      {},
+      (value) => value && typeof value === "object" && !Array.isArray(value)
+    );
   }
 
-  // 只寫回指定群組的 seen-post bucket，並保留其他群組資料。
+  // 只寫回指定群組的 seen-post bucket。
   function setSeenPostGroupStore(groupId, groupStore) {
-    setSeenPostsStore(buildSeenPostsStoreForGroup(groupId, groupStore, getSeenPostsStore()));
+    setNamedGroupObjectValue(
+      "seenPosts",
+      groupId,
+      groupStore && typeof groupStore === "object" ? groupStore : {}
+    );
   }
 
   // 將貼文標記為已看過，並依時間保留最近 N 筆。
@@ -4051,7 +4189,7 @@
   function shouldUseSeenPostStop(groupId) {
     if (!groupId) return false;
     if (getCurrentFeedSortLabel() !== "新貼文") return false;
-    return Object.keys(getSeenPostGroupStore(groupId, getSeenPostsStore())).length > 0;
+    return Object.keys(getSeenPostGroupStore(groupId)).length > 0;
   }
 
   // 建立掃描期的 seen-stop context，供候選抽取與跨視窗停止判斷共用。
@@ -4100,7 +4238,7 @@
 
   // 讀取指定群組最新的 seen map，供 panel/debug 狀態重建使用。
   function getLatestSeenMapForGroup(groupId) {
-    return getSeenPostGroupStore(groupId, getSeenPostsStore());
+    return getSeenPostGroupStore(groupId);
   }
 
   // 依本輪掃描結果送通知、更新命中歷史與已看過貼文狀態。

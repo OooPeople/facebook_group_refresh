@@ -125,9 +125,18 @@
     maxWindowMultiplier: 2,
     minNewPostsBeforeSeenStop: 1,
     consecutiveSeenStopCount: 3,
+    consecutiveStagnantWindowStopCount: 3,
   };
 
   const FEED_SORT_LABELS = ["新貼文", "最相關", "最新動態"];
+  const COMMENT_SORT_LABELS = ["由新到舊", "最相關", "所有留言"];
+  const COMMENT_SORT_DESCRIPTION_FRAGMENTS = [
+    "顯示所有留言",
+    "最新的留言顯示在最上方",
+    "優先顯示朋友的留言",
+    "獲得最多互動的留言",
+    "可能是垃圾訊息",
+  ];
   const GROUP_NAVIGATION_LABELS = [
     "討論區",
     "精選",
@@ -151,6 +160,7 @@
       '[role="feed"]',
       'div[data-pagelet*="GroupsFeed"]',
       'div[data-pagelet*="FeedUnit"]',
+      '[role="main"]',
     ],
     postTextExpanderCandidates: [
       'div[role="button"]',
@@ -159,7 +169,7 @@
       "button",
     ],
     postContainerCandidates: [
-      'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]',
+      'a[href*="/groups/"][href*="/posts/"], a[href*="/groups/"][href*="/post/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]',
       '[role="feed"] [role="article"]',
       '[role="feed"] > div',
       'div[data-pagelet*="FeedUnit"]',
@@ -167,7 +177,9 @@
       '[aria-posinset]',
     ],
     postPermalinkAnchors:
-      'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]',
+      'a[href*="/groups/"][href*="/posts/"], a[href*="/groups/"][href*="/post/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]',
+    commentPermalinkAnchors:
+      'a[href*="comment_id="], a[href*="reply_comment_id="]',
     postStoryMessage:
       'div[data-ad-comet-preview="message"], div[data-ad-preview="message"], [data-ad-rendering-role="story_message"]',
     postIdSourceNodes:
@@ -184,6 +196,10 @@
       '[data-ad-rendering-role="story_message"]',
     ],
     fallbackPostText: [
+      'div[dir="auto"]',
+      'span[dir="auto"]',
+    ],
+    commentTextCandidates: [
       'div[dir="auto"]',
       'span[dir="auto"]',
     ],
@@ -205,6 +221,7 @@
   const REGEX_PATTERNS = Object.freeze({
     postPermalinkId: [
       /\/groups\/[^/?#]+\/posts\/(\d+)/i,
+      /\/groups\/[^/?#]+\/post\/(\d+)/i,
       /\/groups\/[^/?#]+\/permalink\/(\d+)/i,
       /[?&]set=gm\.(\d+)/i,
       /\bgm\.(\d+)/i,
@@ -223,6 +240,11 @@
       /"storyID":"?(\d+)/i,
       /"feedback_target_id":"?(\d+)/i,
       /"ft_ent_identifier":"?(\d+)/i,
+    ],
+    commentId: [
+      /[?&](?:comment_id|reply_comment_id)=(\d{8,})/i,
+      /\b(?:comment_id|reply_comment_id|feedback_comment_id)["'=:\s]+(\d{8,})/i,
+      /"(?:comment_id|reply_comment_id|feedback_comment_id)":"?(\d+)/i,
     ],
     cleanedTextNoise: [
       /\b[a-z0-9]{12,}\.com\b/gi,
@@ -267,13 +289,14 @@
     schedulerRuntime: {
       observer: null,
       scanTimer: null,
+      scanDeadline: null,
       refreshTimer: null,
       refreshDeadline: null,
       routeTimer: null,
       renderTimer: null,
     },
     sessionRuntime: {
-      initializedGroups: new Set(),
+      initializedScopes: new Set(),
     },
   };
 
@@ -406,30 +429,59 @@
     });
   }
 
-  // 讀取 sessionRuntime 中已初始化的群組集合；型別不符時退回空 Set。
-  function getInitializedGroupSet() {
-    return STATE.sessionRuntime.initializedGroups instanceof Set
-      ? STATE.sessionRuntime.initializedGroups
+  // 讀取 sessionRuntime 中已初始化的 scan scope 集合；型別不符時退回空 Set。
+  function getInitializedScopeSet() {
+    return STATE.sessionRuntime.initializedScopes instanceof Set
+      ? STATE.sessionRuntime.initializedScopes
       : new Set();
   }
 
-  // 檢查指定群組是否已完成 baseline 初始化。
-  function isGroupInitialized(groupId) {
-    const normalizedGroupId = String(groupId || "");
-    return Boolean(normalizedGroupId) && getInitializedGroupSet().has(normalizedGroupId);
+  // 檢查指定 scan scope 是否已完成 baseline 初始化。
+  function isScopeInitialized(scopeId) {
+    const normalizedScopeId = String(scopeId || "");
+    return Boolean(normalizedScopeId) && getInitializedScopeSet().has(normalizedScopeId);
   }
 
-  // 將指定群組標記為已初始化，並以新的 Set 寫回 session runtime。
-  function markGroupInitialized(groupId) {
-    const normalizedGroupId = String(groupId || "");
-    if (!normalizedGroupId || isGroupInitialized(normalizedGroupId)) {
+  // 將指定 scan scope 標記為已初始化，並以新的 Set 寫回 session runtime。
+  function markScopeInitialized(scopeId) {
+    const normalizedScopeId = String(scopeId || "");
+    if (!normalizedScopeId || isScopeInitialized(normalizedScopeId)) {
       return false;
     }
 
-    const nextGroups = new Set(getInitializedGroupSet());
-    nextGroups.add(normalizedGroupId);
-    setSessionRuntimePatch({ initializedGroups: nextGroups });
+    const nextScopes = new Set(getInitializedScopeSet());
+    nextScopes.add(normalizedScopeId);
+    setSessionRuntimePatch({ initializedScopes: nextScopes });
     return true;
+  }
+
+  function clearScopeInitialized(scopeId) {
+    const normalizedScopeId = String(scopeId || "");
+    if (!normalizedScopeId || !isScopeInitialized(normalizedScopeId)) {
+      return false;
+    }
+
+    const nextScopes = new Set(getInitializedScopeSet());
+    nextScopes.delete(normalizedScopeId);
+    setSessionRuntimePatch({ initializedScopes: nextScopes });
+    return true;
+  }
+
+  // 相容既有呼叫與測試命名；貼文 feed scope 目前仍等於 group id。
+  function getInitializedGroupSet() {
+    return getInitializedScopeSet();
+  }
+
+  function isGroupInitialized(groupId) {
+    return isScopeInitialized(groupId);
+  }
+
+  function markGroupInitialized(groupId) {
+    return markScopeInitialized(groupId);
+  }
+
+  function clearGroupInitialized(groupId) {
+    return clearScopeInitialized(groupId);
   }
 
   // 判斷 patch 是否真的帶有指定欄位，避免把 undefined 視為有意更新。
@@ -1521,11 +1573,86 @@
     return match ? match[1] : "";
   }
 
+  // 從目前 URL 判斷是否是社團單篇貼文 route，並抽出 parent post id。
+  function getCurrentPostRouteId() {
+    const url = normalizeFacebookUrl(location.href);
+    return extractGroupPostRouteIdFromUrl(url, getCurrentGroupId());
+  }
+
+  // 從 Facebook group URL 的多種 permalink 形狀抽出貼文 ID。
+  function extractGroupPostRouteIdFromUrl(url, expectedGroupId = "") {
+    if (!(url instanceof URL)) return "";
+
+    const pathname = url.pathname.replace(/\/+$/, "");
+    const groupPostMatch = pathname.match(/^\/groups\/([^/?#]+)\/posts?\/(?:pcb\.)?(\d+)$/i);
+    if (groupPostMatch) {
+      const [, groupId, postId] = groupPostMatch;
+      if (expectedGroupId && groupId !== expectedGroupId) return "";
+      return postId;
+    }
+
+    const groupPermalinkMatch = pathname.match(/^\/groups\/([^/?#]+)\/permalink\/(\d+)$/i);
+    if (groupPermalinkMatch) {
+      const [, groupId, postId] = groupPermalinkMatch;
+      if (expectedGroupId && groupId !== expectedGroupId) return "";
+      return postId;
+    }
+
+    const groupRouteMatch = pathname.match(/^\/groups\/([^/?#]+)(?:\/.*)?$/i);
+    if (groupRouteMatch) {
+      const [, groupId] = groupRouteMatch;
+      if (expectedGroupId && groupId !== expectedGroupId) return "";
+      return extractGroupRouteQueryPostId(url);
+    }
+
+    return "";
+  }
+
+  // 判斷目前是否是社團單篇貼文頁。
+  function isGroupPostPermalinkPage() {
+    return Boolean(getCurrentGroupId() && getCurrentPostRouteId());
+  }
+
+  // 建立 scan target 的 seen/baseline scope。貼文模式先保留既有 group id，避免既有去重資料失效。
+  function buildScanTargetScopeId(kind, groupId, parentPostId = "") {
+    const normalizedGroupId = String(groupId || "").trim();
+    const normalizedParentPostId = String(parentPostId || "").trim();
+    if (!normalizedGroupId) return "";
+    if (kind === "comments") {
+      return normalizedParentPostId
+        ? `${normalizedGroupId}:post:${normalizedParentPostId}:comments`
+        : "";
+    }
+    return normalizedGroupId;
+  }
+
+  // 整理目前頁面要掃描的 target，讓 scan orchestration 不直接判斷 URL 細節。
+  function getCurrentScanTarget() {
+    const groupId = getCurrentGroupId();
+    const parentPostId = getCurrentPostRouteId();
+    const kind = parentPostId ? "comments" : "posts";
+    const scopeId = buildScanTargetScopeId(kind, groupId, parentPostId);
+    const supported = Boolean(location.hostname === "www.facebook.com" && groupId && scopeId);
+
+    return {
+      kind,
+      groupId,
+      parentPostId,
+      scopeId,
+      supported,
+    };
+  }
+
   // 只允許在 facebook.com/groups/* 頁面啟用掃描。
   function isSupportedGroupPage() {
     if (location.hostname !== "www.facebook.com") return false;
     const groupId = getCurrentGroupId();
     return Boolean(groupId);
+  }
+
+  // 允許目前支援的 scan target 啟用掃描。
+  function isSupportedScanPage() {
+    return getCurrentScanTarget().supported;
   }
 
   // 嘗試抓取目前社團名稱，優先使用指向當前社團首頁的連結文字。
@@ -1669,6 +1796,63 @@
     return "";
   }
 
+  function extractKnownLabelFromText(value, labels) {
+    const text = normalizeText(value);
+    if (!text) return "";
+
+    return labels.find((label) => text.includes(label)) || "";
+  }
+
+  function isLikelyCommentSortOptionText(value) {
+    const text = normalizeText(value);
+    return COMMENT_SORT_DESCRIPTION_FRAGMENTS.some((fragment) => text.includes(fragment));
+  }
+
+  function findCommentSortLabelFromButtonText(value) {
+    const text = normalizeText(value);
+    if (!text || isLikelyCommentSortOptionText(text)) return "";
+
+    return extractKnownLabelFromText(text, COMMENT_SORT_LABELS);
+  }
+
+  // 嘗試辨識單篇貼文頁目前留言排序；只讀取已顯示的排序按鈕，不主動點開選單。
+  function getCurrentCommentSortLabel() {
+    if (!isGroupPostPermalinkPage()) return "";
+
+    const buttons = document.querySelectorAll('[role="button"], [aria-haspopup="menu"], [aria-expanded]');
+    for (const button of buttons) {
+      if (!(button instanceof HTMLElement)) continue;
+      if (!isVisibleElement(button)) continue;
+
+      const label = findCommentSortLabelFromButtonText(button.innerText || button.textContent || "");
+      if (label) {
+        return label;
+      }
+    }
+
+    const spans = document.querySelectorAll('span[dir="auto"]');
+    for (const span of spans) {
+      if (!(span instanceof HTMLElement)) continue;
+      if (!isVisibleElement(span)) continue;
+
+      const text = normalizeText(span.innerText || span.textContent || "");
+      if (!COMMENT_SORT_LABELS.includes(text)) continue;
+      if (!(span.closest?.('[role="button"], [aria-haspopup="menu"], [aria-expanded]') instanceof HTMLElement)) {
+        continue;
+      }
+
+      return text;
+    }
+
+    return "";
+  }
+
+  function getCurrentScanSortLabel(scanTarget = getCurrentScanTarget()) {
+    return scanTarget.kind === "comments"
+      ? getCurrentCommentSortLabel()
+      : getCurrentFeedSortLabel();
+  }
+
   // 判斷文字是否其實是動態牆排序控制，而不是貼文內容。
   function isFeedSortControlText(value) {
     return normalizeText(value).includes("社團動態消息排序方式");
@@ -1722,8 +1906,8 @@
   }
 
   // 將 scan debounce timer 寫入 scheduler runtime。
-  function setScanScheduleState(scanTimer) {
-    setSchedulerRuntimePatch({ scanTimer });
+  function setScanScheduleState(scanTimer, scanDeadline = null) {
+    setSchedulerRuntimePatch({ scanTimer, scanDeadline });
   }
 
   // 安裝目前使用的 feed observer handle。
@@ -1755,7 +1939,7 @@
   // 安排下一次頁面刷新；暫停或不在群組頁時不啟動。
   function scheduleRefresh() {
     clearRefreshTimer();
-    if (STATE.config.paused || !isSupportedGroupPage()) return;
+    if (STATE.config.paused || !isSupportedScanPage()) return;
 
     const delaySec = getRefreshSeconds();
     const refreshDeadline = Date.now() + delaySec * 1000;
@@ -1778,7 +1962,7 @@
     if (!STATE.schedulerRuntime.scanTimer) return;
 
     clearTimeout(STATE.schedulerRuntime.scanTimer);
-    setScanScheduleState(null);
+    setScanScheduleState(null, null);
   }
 
   // 清掉目前監控流程會用到的排程 timer。
@@ -1813,20 +1997,27 @@
   // 以 debounce 方式安排掃描，並在 route 剛切換時多等一段穩定時間。
   function scheduleScan(reason) {
     if (STATE.config.paused || STATE.scanRuntime.isLoadingMorePosts || STATE.scanRuntime.isScanning) return;
-    if (!isSupportedGroupPage()) {
+    if (!isSupportedScanPage()) {
       requestPanelRender();
       return;
     }
 
-    const routeSettleRemainingMs = getRecentRouteSettleRemainingMs();
+    const routeSettleRemainingMs = reason === "manual-start" ? 0 : getRecentRouteSettleRemainingMs();
     const baseDelayMs = reason === "manual-start" ? 0 : STATE.config.scanDebounceMs;
     const delayMs = Math.max(baseDelayMs, routeSettleRemainingMs);
 
     clearScanTimer();
-    setScanScheduleState(window.setTimeout(() => {
-      setScanScheduleState(null);
+    if (delayMs <= 0) {
+      setScanScheduleState(null, null);
       runScan(reason);
-    }, delayMs));
+      return;
+    }
+
+    const scanDeadline = Date.now() + delayMs;
+    setScanScheduleState(window.setTimeout(() => {
+      setScanScheduleState(null, null);
+      runScan(reason);
+    }, delayMs), scanDeadline);
   }
 
   // Facebook SPA route 剛變更時先等待 DOM 穩定，降低抓到半套畫面的機率。
@@ -1859,9 +2050,158 @@
     return document.body;
   }
 
+  // 判斷 mutation 是否來自本 userscript 自己的 UI，避免面板重繪反覆重排 scan timer。
+  function getMutationNodeElement(node) {
+    if (node instanceof HTMLElement) return node;
+    return node?.parentElement instanceof HTMLElement ? node.parentElement : null;
+  }
+
+  function isOwnScriptUiElement(element) {
+    if (!(element instanceof HTMLElement)) return false;
+
+    return Boolean(element.closest?.([
+      "#fb-group-refresh-panel",
+      "#fbgr-history-modal",
+      "#fbgr-settings-modal",
+      "#fbgr-include-help-modal",
+      "#fbgr-ntfy-help-modal",
+      "#fbgr-discord-help-modal",
+    ].join(",")));
+  }
+
+  function mutationHasRelevantAddedNode(mutation) {
+    const targetElement = getMutationNodeElement(mutation?.target);
+    if (isOwnScriptUiElement(targetElement)) return false;
+
+    for (const node of mutation?.addedNodes || []) {
+      const element = getMutationNodeElement(node);
+      if (!element) continue;
+      if (isOwnScriptUiElement(element)) continue;
+      return true;
+    }
+
+    return false;
+  }
+
+  function mutationsHaveRelevantAddedNodes(mutations) {
+    return Array.from(mutations || []).some(mutationHasRelevantAddedNode);
+  }
+
   // 定義每次向下捲動的保守步長。
   function getScrollStep() {
     return Math.max(320, Math.floor(window.innerHeight * 0.62));
+  }
+
+  function getWindowScrollY() {
+    return Math.round(
+      Number(window.scrollY) ||
+      Number(window.pageYOffset) ||
+      Number(document.scrollingElement?.scrollTop) ||
+      Number(document.documentElement?.scrollTop) ||
+      Number(document.body?.scrollTop) ||
+      0
+    );
+  }
+
+  function isScrollableElement(element) {
+    if (!(element instanceof HTMLElement)) return false;
+
+    const style = window.getComputedStyle(element);
+    const overflowY = String(style.overflowY || style.overflow || "").toLowerCase();
+    const allowsScroll = /auto|scroll|overlay/.test(overflowY);
+    const scrollHeight = Number(element.scrollHeight) || 0;
+    const clientHeight = Number(element.clientHeight) || 0;
+
+    return allowsScroll && scrollHeight > clientHeight + 24;
+  }
+
+  function findScrollableAncestor(element) {
+    let current = element instanceof HTMLElement ? element.parentElement : null;
+    let depth = 0;
+
+    while (current instanceof HTMLElement && depth < 12) {
+      if (isScrollableElement(current)) {
+        return current;
+      }
+      current = current.parentElement;
+      depth += 1;
+    }
+
+    return null;
+  }
+
+  function getDocumentScrollElement() {
+    const candidates = [
+      document.scrollingElement,
+      document.documentElement,
+      document.body,
+    ];
+
+    return candidates.find((element) => element instanceof HTMLElement) || null;
+  }
+
+  function getCommentScrollElement() {
+    for (const anchor of getSelectorElementsByOrder(document, [SELECTORS.commentPermalinkAnchors])) {
+      if (!(anchor instanceof HTMLAnchorElement)) continue;
+      if (!isVisibleElement(anchor)) continue;
+      if (!isElementInActiveScanWindow(anchor)) continue;
+
+      const scrollableAncestor = findScrollableAncestor(anchor);
+      if (scrollableAncestor) {
+        return scrollableAncestor;
+      }
+    }
+
+    return null;
+  }
+
+  function getLoadMoreScrollTarget() {
+    if (getCurrentScanTarget().kind === "comments") {
+      return getCommentScrollElement() || getDocumentScrollElement();
+    }
+
+    return getDocumentScrollElement();
+  }
+
+  function getScrollTargetTop(target) {
+    if (target instanceof HTMLElement) {
+      return Math.round(Number(target.scrollTop) || 0);
+    }
+
+    return getWindowScrollY();
+  }
+
+  function captureLoadMoreScrollSnapshot() {
+    const target = getLoadMoreScrollTarget();
+    return {
+      target,
+      targetTop: getScrollTargetTop(target),
+      windowY: getWindowScrollY(),
+    };
+  }
+
+  function restoreLoadMoreScrollSnapshot(snapshot) {
+    if (!snapshot) return;
+
+    if (snapshot.target instanceof HTMLElement) {
+      snapshot.target.scrollTop = snapshot.targetTop;
+    }
+    window.scrollTo(0, snapshot.windowY);
+  }
+
+  function scrollTargetBy(target, deltaY) {
+    const beforeTop = getScrollTargetTop(target);
+
+    if (target instanceof HTMLElement && typeof target.scrollBy === "function") {
+      target.scrollBy(0, deltaY);
+    } else if (target instanceof HTMLElement) {
+      target.scrollTop = beforeTop + deltaY;
+    } else {
+      window.scrollBy(0, deltaY);
+    }
+
+    const afterTop = getScrollTargetTop(target);
+    return afterTop > beforeTop;
   }
 
   // 取得元素可見文字並做正規化。
@@ -2040,6 +2380,39 @@
     }
   }
 
+  function findCommentTextExpanders(container) {
+    if (!(container instanceof HTMLElement)) return [];
+
+    const results = [];
+    const seen = new Set();
+
+    for (const node of getSelectorElementsByOrder(container, SELECTORS.postTextExpanderCandidates)) {
+      if (!(node instanceof HTMLElement)) continue;
+      if (!isVisibleElement(node)) continue;
+
+      const text = getElementText(node);
+      if (!TEXT_PATTERNS.postTextExpanderLabels.includes(text)) continue;
+      if (seen.has(node)) continue;
+
+      seen.add(node);
+      results.push(node);
+    }
+
+    return sortElementsByViewportTop(results);
+  }
+
+  async function expandCollapsedCommentText(container) {
+    if (!(container instanceof HTMLElement)) return;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const expanders = findCommentTextExpanders(container);
+      if (!expanders.length) break;
+
+      expanders[0].click();
+      await sleep(180);
+    }
+  }
+
   // 在正式抽取前做最小量的 DOM 準備，保持 extractPostRecord() 同步。
   async function preparePostContainerForExtraction(container) {
     if (!(container instanceof HTMLElement)) {
@@ -2048,6 +2421,19 @@
 
     await expandCollapsedPostText(container);
     return warmPermalinkAnchors(container);
+  }
+
+  async function prepareCommentContainerForExtraction(container) {
+    if (!(container instanceof HTMLElement)) {
+      return buildPermalinkWarmupState();
+    }
+
+    await expandCollapsedCommentText(container);
+    return buildPermalinkWarmupState({
+      warmupAttempted: false,
+      warmupResolved: true,
+      warmupCandidateCount: 0,
+    });
   }
 
   // 將命中的節點提升到最接近的頂層貼文容器，避免把留言當成貼文。
@@ -2166,6 +2552,100 @@
     return results.slice(0, limit);
   }
 
+  function hasCommentPermalinkAnchor(container) {
+    if (!(container instanceof HTMLElement)) return false;
+    return container.querySelector(SELECTORS.commentPermalinkAnchors) instanceof HTMLAnchorElement;
+  }
+
+  function isLikelyCommentContainer(container, anchor) {
+    if (!(container instanceof HTMLElement) || !(anchor instanceof HTMLAnchorElement)) return false;
+    if (!isVisibleElement(container)) return false;
+    if (!container.contains(anchor)) return false;
+    if (!hasCommentPermalinkAnchor(container)) return false;
+    if (container.querySelector(SELECTORS.postStoryMessage)) return false;
+
+    const textDetails = extractCommentTextDetails(container);
+    const text = normalizeText(textDetails.text);
+    if (textDetails.source !== "comment") return false;
+    if (text.length < 2) return false;
+    if (text.length > 1600) return false;
+    if (isLikelyNonBodyCommentText(text)) return false;
+
+    return true;
+  }
+
+  // 從留言時間連結往上找最小可用容器，避免直接抓到整篇貼文 article。
+  function findCommentContainerFromPermalinkAnchor(anchor) {
+    if (!(anchor instanceof HTMLAnchorElement)) return null;
+    if (!isCommentPermalinkHref(anchor.href || anchor.getAttribute("href") || "")) return null;
+
+    const closestArticle = anchor.closest?.('[role="article"]') || null;
+    let current = anchor.parentElement;
+    let depth = 0;
+
+    while (current instanceof HTMLElement && depth < 10) {
+      if (isLikelyCommentContainer(current, anchor)) {
+        return current;
+      }
+      if (closestArticle instanceof HTMLElement && current === closestArticle) {
+        break;
+      }
+      current = current.parentElement;
+      depth += 1;
+    }
+
+    if (closestArticle instanceof HTMLElement && isLikelyCommentContainer(closestArticle, anchor)) {
+      return closestArticle;
+    }
+
+    return null;
+  }
+
+  function getCommentContainerSourceLabel(selector) {
+    if (selector === SELECTORS.commentPermalinkAnchors) return "comment_permalink_anchor";
+    return String(selector || "(unknown)");
+  }
+
+  // 從 comment permalink 收集留言候選。第一版只信任帶 comment_id 的時間連結。
+  function collectCommentContainers(limit = getCandidateCollectionLimit()) {
+    const results = [];
+    const seen = new Set();
+
+    for (const anchor of getSelectorElementsByOrder(document, [SELECTORS.commentPermalinkAnchors])) {
+      if (!(anchor instanceof HTMLAnchorElement)) continue;
+      if (!isVisibleElement(anchor)) continue;
+      if (!isElementInActiveScanWindow(anchor)) continue;
+
+      const href = anchor.href || anchor.getAttribute("href") || "";
+      const commentId = extractCommentIdFromValue(href);
+      if (!commentId) continue;
+
+      const container = findCommentContainerFromPermalinkAnchor(anchor);
+      if (!(container instanceof HTMLElement)) continue;
+      if (!isElementInActiveScanWindow(container)) continue;
+
+      const identity = commentId || container;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+
+      const text = normalizeText(container.innerText || container.textContent || "");
+      results.push({
+        element: container,
+        source: getCommentContainerSourceLabel(SELECTORS.commentPermalinkAnchors),
+        top: Math.round(container.getBoundingClientRect().top),
+        textFingerprint: buildCandidateCacheFingerprint(text),
+        candidateQualityScore: 4,
+        commentAnchorHref: href,
+        commentAnchorElement: anchor,
+      });
+
+      if (results.length >= limit) break;
+    }
+
+    results.sort((a, b) => a.top - b.top);
+    return results;
+  }
+
   // permalink / postId 抽取輔助函式。
   // 這段維持在 extractor 層，避免把 DOM 預熱、URL 正規化與 debug 診斷滲進 scan orchestration。
   function buildCanonicalGroupPostUrl(groupId, postId) {
@@ -2173,6 +2653,21 @@
     const normalizedPostId = String(postId || "").trim();
     if (!normalizedGroupId || !/^\d{8,}$/.test(normalizedPostId)) return "";
     return `https://www.facebook.com/groups/${normalizedGroupId}/posts/${normalizedPostId}`;
+  }
+
+  function buildCanonicalGroupCommentUrl(groupId, postId, commentId) {
+    const normalizedGroupId = String(groupId || "").trim();
+    const normalizedPostId = String(postId || "").trim();
+    const normalizedCommentId = String(commentId || "").trim();
+    if (
+      !normalizedGroupId ||
+      !/^\d{8,}$/.test(normalizedPostId) ||
+      !/^\d{8,}$/.test(normalizedCommentId)
+    ) {
+      return "";
+    }
+
+    return `https://www.facebook.com/groups/${normalizedGroupId}/posts/${normalizedPostId}/?comment_id=${normalizedCommentId}`;
   }
 
   // 將輸入值解析成可接受的 Facebook URL 物件。
@@ -2297,7 +2792,7 @@
     }
 
     const pathname = url.pathname.replace(/\/+$/, "");
-    const groupPostMatch = pathname.match(/^\/groups\/([^/?#]+)\/posts\/(\d+)$/i);
+    const groupPostMatch = pathname.match(/^\/groups\/([^/?#]+)\/posts?\/(\d+)$/i);
     if (groupPostMatch) {
       const [, groupId, postId] = groupPostMatch;
       return buildGroupScopedPermalinkDetails(
@@ -2776,6 +3271,43 @@
     };
   }
 
+  function buildCommentPermalinkDetails(permalink = "", source = "unavailable", commentId = "") {
+    return {
+      permalink: String(permalink || ""),
+      source: String(source || "unavailable"),
+      commentId: String(commentId || ""),
+    };
+  }
+
+  function extractCommentPermalinkDetails(container, scanTarget = getCurrentScanTarget()) {
+    if (!(container instanceof HTMLElement)) {
+      return buildCommentPermalinkDetails();
+    }
+
+    const groupId = String(scanTarget.groupId || getCurrentGroupId() || "");
+    const parentPostId = String(scanTarget.parentPostId || getCurrentPostRouteId() || "");
+    const anchors = collectAnchorsFromScope(container, SELECTORS.commentPermalinkAnchors);
+
+    for (const anchor of anchors) {
+      const href = anchor.href || anchor.getAttribute("href") || "";
+      const commentId = extractCommentIdFromValue(href);
+      if (!commentId) continue;
+
+      const url = normalizeFacebookUrl(href);
+      const routePostId = extractGroupPostRouteIdFromUrl(url, groupId);
+      const postId = routePostId || parentPostId;
+      const canonicalPermalink = buildCanonicalGroupCommentUrl(groupId, postId, commentId);
+
+      return buildCommentPermalinkDetails(
+        canonicalPermalink || href,
+        canonicalPermalink ? "comment_anchor" : "comment_anchor_raw",
+        commentId
+      );
+    }
+
+    return buildCommentPermalinkDetails();
+  }
+
   // 從網址、data-ft、innerHTML 等雜訊字串裡盡量抽出穩定的 post ID。
   function extractPostIdFromValue(value) {
     const text = String(value || "");
@@ -2785,6 +3317,14 @@
       [text],
       [...REGEX_PATTERNS.postPermalinkId, ...REGEX_PATTERNS.metadataPostId]
     );
+  }
+
+  // 從 URL、metadata 或 innerHTML 等字串中抽出留言 ID。
+  function extractCommentIdFromValue(value) {
+    const text = String(value || "");
+    if (!text) return "";
+
+    return extractFirstPatternMatch([text], REGEX_PATTERNS.commentId);
   }
 
   // 只從 metadata 類型字串中抽取 post id。
@@ -2886,6 +3426,73 @@
     }) || "";
   }
 
+  function isLikelyNonBodyCommentText(value) {
+    const text = normalizeText(value);
+    if (!text) return true;
+    if (isLikelyTimestampAnchorText(text)) return true;
+    if (TEXT_PATTERNS.postTextExpanderLabels.includes(text)) return true;
+    if (REGEX_PATTERNS.authorUiLabels.test(text)) return true;
+    if (/^(?:讚|like|回覆|reply)$/iu.test(text)) return true;
+    return false;
+  }
+
+  function isLikelyCommentAuthorText(value) {
+    const text = normalizeText(value).replace(REGEX_PATTERNS.authorFollowSuffix, "");
+    if (!text || text.length > 80) return false;
+    if (text.startsWith("#")) return false;
+    if (isLikelyNonBodyCommentText(text)) return false;
+    if (isLikelyGroupNavigationLabel(text)) return false;
+    return true;
+  }
+
+  function isLikelyCommentAuthorHref(value) {
+    const url = normalizeFacebookUrl(value);
+    if (!url) return false;
+
+    const pathname = url.pathname.replace(/\/+$/, "");
+    if (/^\/hashtag\//i.test(pathname)) return false;
+    if (isCommentPermalinkHref(url.href)) return false;
+
+    return true;
+  }
+
+  function getCommentAuthorDistanceScore(authorAnchor, commentAnchor) {
+    if (!(authorAnchor instanceof HTMLElement) || !(commentAnchor instanceof HTMLElement)) return 0;
+
+    const authorRect = authorAnchor.getBoundingClientRect();
+    const commentRect = commentAnchor.getBoundingClientRect();
+    const authorCenter = authorRect.top + (authorRect.height / 2);
+    const commentCenter = commentRect.top + (commentRect.height / 2);
+    const distance = Math.abs(authorCenter - commentCenter);
+    const precedingBonus = authorRect.top <= commentRect.top + 16 ? 120 : 0;
+
+    return Math.max(0, 1000 - Math.round(distance)) + precedingBonus;
+  }
+
+  function extractCommentAuthor(container, commentAnchor = null) {
+    if (!(container instanceof HTMLElement)) return "";
+
+    const candidates = [];
+    for (const anchor of collectAnchorsFromScope(container, 'a[role="link"], a[href]')) {
+      const href = anchor.href || anchor.getAttribute("href") || "";
+      if (!isLikelyCommentAuthorHref(href)) continue;
+
+      const text = normalizeText(anchor.innerText || anchor.textContent || "")
+        .replace(REGEX_PATTERNS.authorFollowSuffix, "");
+      if (!isLikelyCommentAuthorText(text)) continue;
+
+      candidates.push({
+        text,
+        score: getCommentAuthorDistanceScore(anchor, commentAnchor),
+      });
+    }
+
+    if (!candidates.length) return "";
+
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0].text;
+  }
+
   // 判斷文字尾端是否帶有留言操作列痕跡。
   function hasCommentActionTrail(value) {
     const text = normalizeText(value);
@@ -2957,6 +3564,45 @@
     return extractPostTextDetails(container).text;
   }
 
+  function isLikelyCommentTextNode(text, node) {
+    if (!(node instanceof HTMLElement)) return false;
+    const normalized = normalizeText(text);
+    if (!normalized || normalized.length < 2) return false;
+    if (TEXT_PATTERNS.postTextExpanderLabels.includes(normalized)) return false;
+    if (REGEX_PATTERNS.authorUiLabels.test(normalized)) return false;
+    if (isLikelyTimestampAnchorText(normalized)) return false;
+    if (isLikelyNonBodyCommentText(normalized)) return false;
+    if (node.closest?.("a[href]")) return false;
+
+    return true;
+  }
+
+  // 留言文字通常在時間連結附近的 div[dir="auto"]，避免套用貼文上半部區域假設。
+  function extractCommentTextDetails(container) {
+    const snippets = collectUniqueTextSnippets(container, SELECTORS.commentTextCandidates, {
+      normalize: cleanCommentExtractedText,
+      minLength: 2,
+      maxItems: 6,
+      shouldInclude: isLikelyCommentTextNode,
+    });
+
+    if (snippets.length) {
+      const rawText = normalizeText(snippets.join(" "));
+      return {
+        text: cleanCommentExtractedText(rawText),
+        rawText,
+        source: "comment",
+      };
+    }
+
+    const rawText = normalizeText(container?.innerText || container?.textContent || "");
+    return {
+      text: cleanCommentExtractedText(rawText),
+      rawText,
+      source: "container",
+    };
+  }
+
   // 清理抽出的貼文文字，移除按鈕文案與常見噪音片段。
   function cleanExtractedText(value) {
     let text = normalizeText(value);
@@ -2975,6 +3621,40 @@
     text = text.replace(/\s+/g, " ").trim();
 
     return text;
+  }
+
+  function collapseRepeatedAdjacentText(value) {
+    let text = normalizeText(value);
+    if (!text) return "";
+
+    while (true) {
+      const tokens = text.split(" ");
+      if (tokens.length > 1 && tokens.length % 2 === 0) {
+        const halfLength = tokens.length / 2;
+        const left = tokens.slice(0, halfLength).join(" ");
+        const right = tokens.slice(halfLength).join(" ");
+        if (left.length >= 8 && left === right) {
+          text = left;
+          continue;
+        }
+      }
+
+      if (text.length % 2 === 0) {
+        const halfLength = text.length / 2;
+        const left = text.slice(0, halfLength);
+        const right = text.slice(halfLength);
+        if (left.length >= 8 && left === right) {
+          text = left;
+          continue;
+        }
+      }
+
+      return text;
+    }
+  }
+
+  function cleanCommentExtractedText(value) {
+    return collapseRepeatedAdjacentText(cleanExtractedText(value));
   }
 
   // 將文字壓成較短且穩定的 signature，供 fallback 去重使用。
@@ -3008,6 +3688,11 @@
     }
 
     return "";
+  }
+
+  // 判斷 scan item 是否為留言；第一版先保持 post 命名 call sites，相容後續逐步改名。
+  function isCommentScanItem(item) {
+    return Boolean(item && item.itemKind === "comment");
   }
 
   // 依 postId、permalink、作者、來源等訊號計算粗略品質分數。
@@ -3217,6 +3902,25 @@
 
   // 建立目前版本使用的主去重鍵，優先順序為 postId > permalink > 文字組合鍵。
   function getPostKey(post) {
+    if (isCommentScanItem(post)) {
+      if (post.commentId) return `comment:${post.commentId}`;
+
+      const permalink = String(post.permalink || "");
+      const permalinkCommentId = extractCommentIdFromValue(permalink);
+      if (permalinkCommentId) return `comment-url:${permalink}`;
+
+      const parentPostId = String(post.parentPostId || "").trim();
+      const compositeKey = buildCompositePostKey(buildPostKeyFragments(post));
+      if (parentPostId && compositeKey) {
+        return `post:${parentPostId}||${compositeKey}`;
+      }
+      if (compositeKey) {
+        return `comment-fallback:${compositeKey}`;
+      }
+
+      return buildFallbackId(post);
+    }
+
     if (post.postId) return `id:${post.postId}`;
 
     const permalink = String(post.permalink || "");
@@ -3240,6 +3944,23 @@
     const compositeKey = buildCompositePostKey(buildPostKeyFragments(post));
     const fallbackId = buildFallbackId(post);
     const legacyKey = getLegacyPostKey(post);
+
+    if (isCommentScanItem(post)) {
+      const permalinkCommentId = extractCommentIdFromValue(permalink);
+      const parentPostId = String(post.parentPostId || "").trim();
+
+      appendUniquePostKey(keys, seen, post.commentId ? `comment:${post.commentId}` : "");
+      appendUniquePostKey(keys, seen, permalinkCommentId ? `comment:${permalinkCommentId}` : "");
+      appendUniquePostKey(keys, seen, permalinkCommentId ? `comment-url:${permalink}` : "");
+      appendUniquePostKey(keys, seen, parentPostId && compositeKey
+        ? `post:${parentPostId}||${compositeKey}`
+        : "");
+      appendUniquePostKey(keys, seen, compositeKey ? `comment-fallback:${compositeKey}` : "");
+      appendUniquePostKey(keys, seen, fallbackId);
+      appendUniquePostKey(keys, seen, legacyKey);
+
+      return keys;
+    }
 
     if (post.postId) {
       appendUniquePostKey(keys, seen, `id:${post.postId}`);
@@ -3574,6 +4295,48 @@
     return record;
   }
 
+  function extractCommentRecord(candidate, scanTarget = getCurrentScanTarget()) {
+    const container = candidate.element;
+    const preparation = candidate.preparation || buildPermalinkWarmupState();
+    const permalinkDetails = extractCommentPermalinkDetails(container, scanTarget);
+    const textDetails = extractCommentTextDetails(container);
+    const text = textDetails.text;
+    const author = extractCommentAuthor(container, candidate.commentAnchorElement) || extractAuthor(container);
+    const commentId = permalinkDetails.commentId || extractCommentIdFromValue(candidate.commentAnchorHref);
+    const groupId = scanTarget.groupId || getCurrentGroupId();
+    const parentPostId = scanTarget.parentPostId || getCurrentPostRouteId();
+    const containerRole = container.matches('[role="article"]') ? "article" : "comment_container";
+
+    const record = {
+      itemKind: "comment",
+      commentId,
+      parentPostId,
+      postId: "",
+      permalink: permalinkDetails.permalink || location.href,
+      author,
+      text,
+      normalizedText: normalizeForMatch(text),
+      timestampText: "",
+      timestampEpoch: null,
+      groupId,
+      source: candidate.source,
+      containerRole,
+      candidateTop: candidate.top ?? Number.MAX_SAFE_INTEGER,
+      candidateQualityScore: candidate.candidateQualityScore ?? 0,
+      textSource: textDetails.source,
+      permalinkSource: permalinkDetails.source || "unavailable",
+      canonicalPermalinkCandidateCount: permalinkDetails.permalink ? 1 : 0,
+      postIdSource: "none",
+      warmupAttempted: Boolean(preparation.warmupAttempted),
+      warmupResolved: Boolean(preparation.warmupResolved),
+      warmupCandidateCount: Number(preparation.warmupCandidateCount) || 0,
+      extractedAt: new Date().toISOString(),
+    };
+
+    record.postQualityScore = getPostQualityScore(record);
+    return record;
+  }
+
   // 將候選容器批次抽成貼文，並統計快取命中、空文字、非貼文等過濾資訊。
   async function collectPostsFromCandidates(candidates, scanCache = null, seenStopContext = null) {
     const posts = [];
@@ -3636,6 +4399,56 @@
         meta.stopReason = seenStopReason;
         break;
       }
+    }
+
+    return { posts, meta };
+  }
+
+  async function collectCommentsFromCandidates(candidates, scanTarget, scanCache = null) {
+    const posts = [];
+    const meta = {
+      cacheHitCount: 0,
+      freshExtractCount: 0,
+      filteredEmptyTextCount: 0,
+      filteredNonPostCount: 0,
+      filteredFeedSortControlCount: 0,
+      articleElementCount: 0,
+      postsWithPostIdCount: 0,
+    };
+
+    for (const candidate of candidates) {
+      const cachedEntry = scanCache?.get(candidate.element) || null;
+      let comment = null;
+
+      if (cachedEntry && cachedEntry.fingerprint === candidate.textFingerprint) {
+        comment = cachedEntry.post;
+        meta.cacheHitCount += 1;
+      } else {
+        candidate.preparation = await prepareCommentContainerForExtraction(candidate.element);
+        comment = extractCommentRecord(candidate, scanTarget);
+        meta.freshExtractCount += 1;
+        scanCache?.set(candidate.element, {
+          post: comment,
+          fingerprint: buildCandidateCacheFingerprint(candidate.element.innerText || candidate.element.textContent || ""),
+        });
+      }
+
+      if (!normalizeText(comment.text)) {
+        meta.filteredEmptyTextCount += 1;
+        continue;
+      }
+      if (!comment.commentId && !comment.permalink) {
+        meta.filteredNonPostCount += 1;
+        continue;
+      }
+      if (candidate.element.matches('[role="article"]')) {
+        meta.articleElementCount += 1;
+      }
+      if (comment.commentId) {
+        meta.postsWithPostIdCount += 1;
+      }
+
+      posts.push(comment);
     }
 
     return { posts, meta };
@@ -3705,7 +4518,7 @@
   }
 
   // 依目前狀態判斷是否應停止跨視窗掃描。
-  function getWindowCollectionStopReason(accumulatedCount, targetPostCount, collected) {
+  function getWindowCollectionStopReason(accumulatedCount, targetPostCount, collected, stagnantWindows = 0) {
     if (collected?.meta?.stopReason) {
       return collected.meta.stopReason;
     }
@@ -3715,6 +4528,9 @@
     if (!STATE.config.autoLoadMorePosts) {
       return "已停用自動載入更多貼文";
     }
+    if (stagnantWindows >= SCAN_LIMITS.consecutiveStagnantWindowStopCount) {
+      return `已連續 ${stagnantWindows} 輪沒有新增項目，停止深度掃描`;
+    }
 
     return "";
   }
@@ -3722,11 +4538,10 @@
   // 依設定執行下一輪 load-more 動作。
   function performConfiguredLoadMore() {
     if (getLoadMoreMode() === "wheel") {
-      performWheelLikeLoad();
-      return;
+      return performWheelLikeLoad();
     }
 
-    performScrollLoad();
+    return performScrollLoad();
   }
 
   // 收尾跨視窗掃描的停止原因，讓 return 結構固定一致。
@@ -3893,7 +4708,7 @@
       return collectCurrentWindowOnlyResult(context, initialCandidates);
     }
 
-    const startY = window.scrollY;
+    const scrollSnapshot = captureLoadMoreScrollSnapshot();
     setScanRuntimePatch({ isLoadingMorePosts: true });
 
     try {
@@ -3928,21 +4743,29 @@
           context.stagnantWindows
         );
 
-        result.stopReason = getWindowCollectionStopReason(accumulated.length, targetPostCount, collected);
+        result.stopReason = getWindowCollectionStopReason(
+          accumulated.length,
+          targetPostCount,
+          collected,
+          context.stagnantWindows
+        );
         if (result.stopReason) {
           break;
         }
 
         result.attempted = true;
         result.attempts += 1;
-        performConfiguredLoadMore();
+        if (!performConfiguredLoadMore()) {
+          result.stopReason = `頁面未產生可用捲動，停止深度掃描，目前取得 ${accumulated.length}/${targetPostCount} 篇`;
+          break;
+        }
 
         // 給 Facebook 一點時間把新增內容補進 DOM。
         await sleep(900);
       }
     } finally {
       // 掃描結束後把視窗捲回原位，避免干擾使用者閱讀。
-      window.scrollTo(0, startY);
+      restoreLoadMoreScrollSnapshot(scrollSnapshot);
       await sleep(160);
       setScanRuntimePatch({ isLoadingMorePosts: false });
     }
@@ -3950,16 +4773,95 @@
     return finalizeWindowCollectionResult(context);
   }
 
+  function createCommentWindowCollectionContext(scanTarget) {
+    const targetPostCount = clampTargetPostCount(STATE.config.maxPostsPerScan);
+    const result = normalizeCollectedMeta({
+      targetCount: targetPostCount,
+      maxWindowCount: STATE.config.autoLoadMorePosts ? getDynamicMaxWindows(targetPostCount) : 1,
+    });
+
+    return {
+      scanTarget,
+      targetPostCount,
+      result,
+      accumulated: [],
+      accumulatedKeys: new Set(),
+      scanCache: new WeakMap(),
+      maxWindows: result.maxWindowCount,
+      stagnantWindows: 0,
+    };
+  }
+
+  async function collectCurrentWindowComments(targetPostCount, scanTarget, scanCache) {
+    const candidates = collectCommentContainers(getCandidateCollectionLimit(targetPostCount));
+    const collected = await collectCommentsFromCandidates(candidates, scanTarget, scanCache);
+    const posts = dedupeExtractedPosts(collected.posts, targetPostCount);
+
+    return {
+      candidates,
+      collected,
+      posts,
+    };
+  }
+
+  async function collectCurrentCommentWindowOnlyResult(context, initialCandidates) {
+    const { result, scanCache, scanTarget, targetPostCount } = context;
+
+    result.stopReason = "目前正在載入更多內容，先使用當前留言結果";
+    const initialCollected = await collectCommentsFromCandidates(initialCandidates, scanTarget, scanCache);
+    accumulateCollectedMetaCounts(result, initialCollected.meta);
+    const initialPosts = dedupeExtractedPosts(initialCollected.posts, targetPostCount);
+
+    return {
+      posts: initialPosts,
+      meta: result,
+    };
+  }
+
+  // 留言模式先只掃描目前已載入 DOM 的留言；自動滾動等抽取穩定後再加入。
+  async function collectLoadedCommentsOnly(scanTarget) {
+    const targetPostCount = clampTargetPostCount(STATE.config.maxPostsPerScan);
+    const scanCache = new WeakMap();
+    const { candidates, collected, posts } = await collectCurrentWindowComments(
+      targetPostCount,
+      scanTarget,
+      scanCache
+    );
+    const meta = buildSingleWindowCollectedMeta({
+      targetCount: targetPostCount,
+      candidateCount: candidates.length,
+      collectedMeta: collected.meta,
+      parsedCount: posts.length,
+      accumulatedCount: posts.length,
+    });
+
+    meta.mode = "off";
+    meta.maxWindowCount = 1;
+    meta.stopReason = posts.length >= targetPostCount
+      ? "已達目標貼文數"
+      : "已完成目前已載入留言掃描";
+
+    return {
+      posts,
+      meta,
+    };
+  }
+
+  async function collectCommentsAcrossWindows(scanTarget) {
+    return collectLoadedCommentsOnly(scanTarget);
+  }
+
   // 模擬保守的載入更多貼文行為。
   // 用單純 scrollBy 模擬使用者往下看更多貼文。
   function performScrollLoad() {
-    window.scrollBy(0, getScrollStep());
+    return scrollTargetBy(getLoadMoreScrollTarget(), getScrollStep());
   }
 
   // 先嘗試派送 wheel 事件，再退回 scrollBy，讓部分頁面更像真人滾動。
   function performWheelLikeLoad() {
-    const target = document.scrollingElement || document.documentElement || document.body;
+    const target = getLoadMoreScrollTarget();
     const deltaY = getScrollStep();
+    const beforeTop = getScrollTargetTop(target);
 
     try {
       const wheelEvent = new WheelEvent("wheel", {
@@ -3974,7 +4876,11 @@
       // Ignore and fallback to scroll.
     }
 
-    window.scrollBy(0, deltaY);
+    if (getScrollTargetTop(target) > beforeTop) {
+      return true;
+    }
+
+    return scrollTargetBy(target, deltaY);
   }
 
   // 將單次候選收集的統計欄位累加到 scan meta。
@@ -4066,18 +4972,22 @@
   }
 
   // 收集本輪掃描貼文，並處理最上方貼文快篩後的快取寫回。
-  async function collectScanPosts(reason, supported, groupId) {
+  async function collectScanPosts(reason, supported, scanTarget) {
+    const target = scanTarget || {};
+    const groupId = target.groupId || "";
     let collectedResult = createEmptyCollectedResult();
-    if (supported) {
+    if (supported && target.kind === "comments") {
+      collectedResult = await collectCommentsAcrossWindows(target);
+    } else if (supported) {
       const shortcutResult = await collectPostsWithTopPostShortcut(reason, groupId);
       collectedResult = shortcutResult || await collectPostsAcrossWindows(groupId);
     }
 
     const uniquePosts = collectedResult.posts;
-    if (supported && uniquePosts.length) {
+    if (supported && target.kind === "posts" && uniquePosts.length) {
       setLatestTopPostForGroup(groupId, uniquePosts[0]);
     }
-    if (supported && !collectedResult.meta.topPostShortcutMatched) {
+    if (supported && target.kind === "posts" && !collectedResult.meta.topPostShortcutMatched) {
       setLatestScanPostsForGroup(groupId, uniquePosts);
     }
 
@@ -4088,9 +4998,9 @@
   }
 
   // 將單篇貼文套用 include / exclude / seen 判斷，整理成統一摘要格式。
-  function buildPostScanSummary(post, groupId, includeRules, excludeRules) {
+  function buildPostScanSummary(post, scopeId, includeRules, excludeRules) {
     const postKey = getPostKey(post);
-    const seen = hasSeenPost(groupId, post);
+    const seen = hasSeenPost(scopeId, post);
     const includeResult = matchRules(includeRules, post.normalizedText);
     const excludeResult = excludeRules.length
       ? matchRules(excludeRules, post.normalizedText)
@@ -4112,12 +5022,12 @@
   }
 
   // 將貼文套用 include / exclude 與已看過判斷，整理成本輪摘要與通知佇列。
-  function summarizeScanPosts(uniquePosts, groupId, includeRules, excludeRules) {
+  function summarizeScanPosts(uniquePosts, scopeId, includeRules, excludeRules) {
     const summaries = [];
     const matchesToNotify = [];
 
     for (const post of uniquePosts) {
-      const summary = buildPostScanSummary(post, groupId, includeRules, excludeRules);
+      const summary = buildPostScanSummary(post, scopeId, includeRules, excludeRules);
       summaries.push(summary);
 
       // 已看過或不符合規則的貼文只保留在摘要，不進通知佇列。
@@ -4215,10 +5125,10 @@
   }
 
   // 依序發送本輪新命中的通知，並立即把已通知 key 納入 seen。
-  async function notifyMatchesAndMarkSeen(groupId, matchesToNotify) {
+  async function notifyMatchesAndMarkSeen(scopeId, matchesToNotify) {
     for (const item of matchesToNotify) {
       await notifyForPost(item);
-      markPostSeen(groupId, item);
+      markPostSeen(scopeId, item);
     }
   }
 
@@ -4230,23 +5140,23 @@
   }
 
   // 即使沒有通知，也要把本輪掃到的貼文記成 seen，避免下一輪重複報警。
-  function markSummariesSeen(groupId, summaries) {
+  function markSummariesSeen(scopeId, summaries) {
     for (const item of summaries) {
-      markPostSeen(groupId, item);
+      markPostSeen(scopeId, item);
     }
   }
 
   // 讀取指定群組最新的 seen map，供 panel/debug 狀態重建使用。
-  function getLatestSeenMapForGroup(groupId) {
-    return getSeenPostGroupStore(groupId);
+  function getLatestSeenMapForScope(scopeId) {
+    return getSeenPostGroupStore(scopeId);
   }
 
   // 依本輪掃描結果送通知、更新命中歷史與已看過貼文狀態。
-  async function commitScanState(groupId, summaries, matchesToNotify) {
-    await notifyMatchesAndMarkSeen(groupId, matchesToNotify);
+  async function commitScanState(groupId, scopeId, summaries, matchesToNotify) {
+    await notifyMatchesAndMarkSeen(scopeId, matchesToNotify);
     addMatchesToHistory(groupId, matchesToNotify);
-    markSummariesSeen(groupId, summaries);
-    return getLatestSeenMapForGroup(groupId);
+    markSummariesSeen(scopeId, summaries);
+    return getLatestSeenMapForScope(scopeId);
   }
 
   // 將摘要貼文重新套用最新 seen map，供主面板顯示使用。
@@ -4262,6 +5172,9 @@
     reason,
     supported,
     groupId,
+    targetKind,
+    scopeId,
+    parentPostId,
     collectedResult,
     uniquePosts,
     matchesToNotify,
@@ -4273,6 +5186,9 @@
       reason,
       supported,
       groupId,
+      targetKind: targetKind || "posts",
+      scopeId: scopeId || groupId || "",
+      parentPostId: parentPostId || "",
       candidateCount: collectedMeta.candidateCount,
       cacheHitCount: collectedMeta.cacheHitCount,
       freshExtractCount: collectedMeta.freshExtractCount,
@@ -4306,17 +5222,18 @@
 
   // 建立單輪掃描需要的固定 context，集中 page/rule/baseline 判斷。
   function createScanExecutionContext(reason) {
-    const supported = isSupportedGroupPage();
-    const groupId = getCurrentGroupId();
+    const target = getCurrentScanTarget();
 
     return {
       reason,
-      supported,
-      groupId,
+      supported: target.supported,
+      target,
+      groupId: target.groupId,
+      scopeId: target.scopeId,
       includeRules: parseKeywordInput(STATE.config.includeKeywords),
       excludeRules: parseKeywordInput(STATE.config.excludeKeywords),
-      // 每個群組第一次掃描只建立 baseline，不對既有貼文發通知。
-      baselineMode: !isGroupInitialized(groupId),
+      // 每個 scan scope 第一次掃描只建立 baseline，不對既有項目發通知。
+      baselineMode: !isScopeInitialized(target.scopeId),
     };
   }
 
@@ -4325,11 +5242,11 @@
     const { collectedResult, uniquePosts } = await collectScanPosts(
       scanContext.reason,
       scanContext.supported,
-      scanContext.groupId
+      scanContext.target
     );
     const { summaries, matchesToNotify } = summarizeScanPosts(
       uniquePosts,
-      scanContext.groupId,
+      scanContext.scopeId,
       scanContext.includeRules,
       scanContext.excludeRules
     );
@@ -4342,11 +5259,16 @@
     };
   }
 
-  // baseline 群組只需要在成功完成本輪掃描後註記一次。
-  function markGroupInitializedAfterScan(groupId, baselineMode) {
+  // baseline scope 只需要在成功完成本輪掃描後註記一次。
+  function markScopeInitializedAfterScan(scopeId, baselineMode) {
     if (baselineMode) {
-      markGroupInitialized(groupId);
+      markScopeInitialized(scopeId);
     }
+  }
+
+  // 相容既有命名。
+  function markGroupInitializedAfterScan(groupId, baselineMode) {
+    markScopeInitializedAfterScan(groupId, baselineMode);
   }
 
   // 將成功完成的 scan 結果整理成 runtime state patch。
@@ -4357,6 +5279,9 @@
         reason: scanContext.reason,
         supported: scanContext.supported,
         groupId: scanContext.groupId,
+        targetKind: scanContext.target.kind,
+        scopeId: scanContext.scopeId,
+        parentPostId: scanContext.target.parentPostId,
         collectedResult: scanData.collectedResult,
         uniquePosts: scanData.uniquePosts,
         matchesToNotify: scanData.matchesToNotify,
@@ -4399,9 +5324,10 @@
       const scanContext = createScanExecutionContext(reason);
       const scanData = await collectScanExecutionData(scanContext);
 
-      markGroupInitializedAfterScan(scanContext.groupId, scanContext.baselineMode);
+      markScopeInitializedAfterScan(scanContext.scopeId, scanContext.baselineMode);
       const latestSeenMap = await commitScanState(
         scanContext.groupId,
+        scanContext.scopeId,
         scanData.summaries,
         scanData.matchesToNotify
       );
@@ -5230,18 +6156,24 @@
     scheduleScan(reason);
   }
 
-  // 清掉目前群組的 seen baseline；若目前不在群組頁則直接略過。
-  function resetSeenBaselineForCurrentGroup() {
-    const groupId = getCurrentGroupId();
-    if (!groupId) return false;
+  // 清掉目前 scan target 的 seen baseline；若目前不在支援頁面則直接略過。
+  function resetSeenBaselineForCurrentTarget() {
+    const target = getCurrentScanTarget();
+    if (!target.supported || !target.scopeId) return false;
 
-    clearSeenPostsForGroup(groupId);
+    clearScopeInitialized(target.scopeId);
+    clearSeenPostsForGroup(target.scopeId);
     return true;
+  }
+
+  // 相容既有命名；社團 feed target 的 scope 仍等於 group id。
+  function resetSeenBaselineForCurrentGroup() {
+    return resetSeenBaselineForCurrentTarget();
   }
 
   // 重新開始目前群組監控，會先清掉該群組的 seen 基準再立即重掃。
   function restartMonitoringForCurrentGroup(reason = "manual-start") {
-    resetSeenBaselineForCurrentGroup();
+    resetSeenBaselineForCurrentTarget();
     resumeMonitoring(reason);
   }
 
@@ -5457,7 +6389,7 @@
           </div>
         </div>
         <div id="fbgr-status" style="padding:8px;border:1px solid #374151;border-radius:8px;background:rgba(255,255,255,0.03);"></div>
-        <div id="fbgr-debug" style="display:none;padding:8px;border:1px solid #374151;border-radius:8px;background:rgba(0,0,0,0.18);color:#c7d2fe;"></div>
+        <div id="fbgr-debug" style="display:none;min-width:0;max-width:100%;overflow:hidden;padding:8px;border:1px solid #374151;border-radius:8px;background:rgba(0,0,0,0.18);color:#c7d2fe;"></div>
       </div>
     `;
   }
@@ -5509,6 +6441,14 @@
     if (!STATE.schedulerRuntime.refreshDeadline) return "未排程";
     const remainSec = Math.max(0, Math.ceil((STATE.schedulerRuntime.refreshDeadline - Date.now()) / 1000));
     return `${remainSec}s`;
+  }
+
+  function formatScanTimerStatus() {
+    if (!STATE.schedulerRuntime.scanTimer) return "未排程";
+    if (!STATE.schedulerRuntime.scanDeadline) return "已排程";
+
+    const remainSec = Math.max(0, Math.ceil((STATE.schedulerRuntime.scanDeadline - Date.now()) / 1000));
+    return `已排程 (${remainSec}s)`;
   }
 
   // 將最後掃描時間格式化為相對時間字串。
@@ -5640,7 +6580,12 @@
   function renderDebugTextRow(label, value, options = {}) {
     const { escapeValue = true } = options;
     const renderedValue = escapeValue ? escapeHtml(value) : String(value || "");
-    return `<div>${escapeHtml(label)}: ${renderedValue}</div>`;
+    return `
+      <div style="display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px;align-items:start;max-width:100%;">
+        <div>${escapeHtml(label)}:</div>
+        <div style="min-width:0;overflow-wrap:anywhere;word-break:break-word;white-space:normal;">${renderedValue}</div>
+      </div>
+    `;
   }
 
   // 批次渲染 debug 摘要列。
@@ -5657,11 +6602,12 @@
     return [
       { label: "狀態", value: viewState.statusLabel },
       { label: "社團", value: escapeHtml(viewState.groupName) },
+      { label: "掃描模式", value: escapeHtml(viewState.targetKindDisplay) },
       {
-        label: "貼文排序",
-        value: `<span style="color:${viewState.feedSortColor};">${escapeHtml(viewState.feedSortDisplay)}</span>`,
+        label: viewState.sortRowLabel,
+        value: `<span style="color:${viewState.sortColor};">${escapeHtml(viewState.sortDisplay)}</span>`,
       },
-      { label: "目標貼文", value: viewState.targetPostCountLabel },
+      { label: "目標項目", value: viewState.targetPostCountLabel },
       { label: "刷新模式", value: escapeHtml(viewState.refreshModeLabel) },
       { label: "下次刷新", value: escapeHtml(viewState.refreshStatusLabel) },
       { label: "停止原因", value: escapeHtml(viewState.stopReasonLabel) },
@@ -5673,6 +6619,15 @@
     return [
       { label: "網址", value: viewState.currentUrlLabel },
       { label: "社團ID", value: viewState.groupIdLabel },
+      { label: "掃描頁面", value: viewState.scanSupportedLabel },
+      { label: "掃描模式", value: viewState.targetKindLabel },
+      { label: "目前排序", value: viewState.sortDisplayLabel },
+      { label: "掃描scope", value: viewState.scopeIdLabel },
+      { label: "父貼文ID", value: viewState.parentPostIdLabel },
+      { label: "監控暫停", value: viewState.pausedLabel },
+      { label: "正在掃描", value: viewState.isScanningLabel },
+      { label: "正在載入", value: viewState.isLoadingMoreLabel },
+      { label: "掃描timer", value: viewState.scanTimerLabel },
       { label: "包含", value: viewState.includeKeywordsLabel },
       { label: "排除", value: viewState.excludeKeywordsLabel },
       { label: "掃描原因", value: viewState.reasonLabel },
@@ -5727,7 +6682,10 @@
   function buildPanelDebugPostViewState(post, index) {
     return {
       indexLabel: `#${index + 1}`,
+      itemKindLabel: post.itemKind || "post",
       sourceLabel: post.source || "(無)",
+      commentIdLabel: post.commentId || "(無)",
+      parentPostIdLabel: post.parentPostId || "(無)",
       postIdLabel: post.postId || "(無)",
       postIdSourceLabel: post.postIdSource || "none",
       permalinkLabel: post.permalink || "(無)",
@@ -5763,8 +6721,17 @@
 
   // 將 latestScan 轉成 panel/debug 共用的摘要欄位。
   function buildLatestScanViewState(latestScan) {
+    const currentTarget = getCurrentScanTarget();
     return {
       reasonLabel: latestScan?.reason || "(無)",
+      targetKindLabel: latestScan?.targetKind || currentTarget.kind || "(無)",
+      scanSupportedLabel: currentTarget.supported ? "是" : "否",
+      scopeIdLabel: latestScan?.scopeId || currentTarget.scopeId || "(無)",
+      parentPostIdLabel: latestScan?.parentPostId || currentTarget.parentPostId || "(無)",
+      pausedLabel: STATE.config.paused ? "是" : "否",
+      isScanningLabel: STATE.scanRuntime.isScanning ? "是" : "否",
+      isLoadingMoreLabel: STATE.scanRuntime.isLoadingMorePosts ? "是" : "否",
+      scanTimerLabel: formatScanTimerStatus(),
       baselineModeLabel: latestScan?.baselineMode ? "是" : "否",
       targetPostCountLabel: String(latestScan?.targetCount ?? STATE.config.maxPostsPerScan),
       loadMoreModeLabel: latestScan?.loadMoreMode || getLoadMoreMode(),
@@ -5793,19 +6760,25 @@
   }
 
   // 建立主面板狀態區需要的 view model。
-  function getPanelStatusViewState({ latestScan, latestPosts, groupName, feedSortLabel }) {
-    const isPreferredFeedSort = feedSortLabel === "新貼文";
+  function getPanelStatusViewState({ latestScan, latestPosts, groupName, sortLabel }) {
+    const currentTarget = getCurrentScanTarget();
+    const targetKind = latestScan?.targetKind || currentTarget.kind;
+    const isCommentTarget = targetKind === "comments";
+    const preferredSortLabel = isCommentTarget ? "由新到舊" : "新貼文";
+    const isPreferredSort = sortLabel === preferredSortLabel;
     const latestScanViewState = buildLatestScanViewState(latestScan);
 
     return {
       postList: buildPanelPostListViewState(latestPosts),
       groupName,
       statusLabel: STATE.config.paused ? "已暫停" : "監控中",
-      feedSortColor: isPreferredFeedSort ? "#f9fafb" : "#fbbf24",
-      feedSortDisplay: isPreferredFeedSort
-        ? feedSortLabel
-        : `${feedSortLabel}（建議調成新貼文）`,
-      targetPostCountLabel: `${STATE.config.maxPostsPerScan} 篇`,
+      targetKindDisplay: isCommentTarget ? "貼文留言" : "社團貼文",
+      sortRowLabel: isCommentTarget ? "留言排序" : "貼文排序",
+      sortColor: isPreferredSort ? "#f9fafb" : "#fbbf24",
+      sortDisplay: isPreferredSort
+        ? sortLabel
+        : `${sortLabel}（建議調成${preferredSortLabel}）`,
+      targetPostCountLabel: `${STATE.config.maxPostsPerScan} 筆`,
       refreshModeLabel: formatRefreshModeLabel(),
       refreshStatusLabel: formatRefreshStatus(),
       stopReasonLabel: latestScanViewState.stopReasonLabel,
@@ -5815,6 +6788,8 @@
   // 建立 debug 區塊需要的 view model，集中所有 fallback 與顯示文字。
   function getPanelDebugViewState({ latestScan, latestPosts, latestError, latestNotification }) {
     const latestScanViewState = buildLatestScanViewState(latestScan);
+    const scanTarget = getCurrentScanTarget();
+    const sortLabel = getCurrentScanSortLabel(scanTarget) || "無法判斷";
 
     return {
       postRows: buildPanelDebugPostRowsViewState(latestPosts),
@@ -5822,6 +6797,7 @@
       groupIdLabel: latestScan?.groupId || getCurrentGroupId() || "(無)",
       includeKeywordsLabel: STATE.config.includeKeywords || "(空白)",
       excludeKeywordsLabel: STATE.config.excludeKeywords || "(空白)",
+      sortDisplayLabel: sortLabel,
       ...latestScanViewState,
       latestNotificationStatusLabel: getLatestNotificationStatusLabel(latestNotification),
       latestErrorLabel: latestError || "(無)",
@@ -5832,7 +6808,8 @@
   function getPanelViewState(runtimeSnapshot = buildPanelRuntimeSnapshot()) {
     const { latestScan, latestPosts, latestError, latestNotification } = runtimeSnapshot;
     const groupName = getCurrentGroupName() || "無法判斷";
-    const feedSortLabel = getCurrentFeedSortLabel() || "無法判斷";
+    const scanTarget = getCurrentScanTarget();
+    const sortLabel = getCurrentScanSortLabel(scanTarget) || "無法判斷";
 
     return {
       pauseButtonLabel: getMonitoringControlLabel(getMonitoringControlAction(STATE.config.paused)),
@@ -5842,7 +6819,7 @@
         latestScan,
         latestPosts,
         groupName,
-        feedSortLabel,
+        sortLabel,
       }),
       debug: getPanelDebugViewState({
         latestScan,
@@ -5975,7 +6952,8 @@
   function renderPanelDebugPostRowHtml(viewState) {
     return `
       <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);overflow-wrap:anywhere;word-break:break-word;">
-        <div>${escapeHtml(viewState.indexLabel)} 來源=${escapeHtml(viewState.sourceLabel)}</div>
+        <div>${escapeHtml(viewState.indexLabel)} 類型=${escapeHtml(viewState.itemKindLabel)} | 來源=${escapeHtml(viewState.sourceLabel)}</div>
+        <div>留言ID=${escapeHtml(viewState.commentIdLabel)} | 父貼文ID=${escapeHtml(viewState.parentPostIdLabel)}</div>
         <div>貼文ID=${escapeHtml(viewState.postIdLabel)}</div>
         <div>貼文ID來源=${escapeHtml(viewState.postIdSourceLabel)}</div>
         <div>連結=${escapeHtml(viewState.permalinkLabel)}</div>
@@ -5999,10 +6977,10 @@
     const summaryRows = renderDebugTextRows(buildPanelDebugSummaryRows(viewState));
 
     return `
-      <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-        <button id="fbgr-debug-copy" type="button" style="padding:4px 8px;cursor:pointer;">複製</button>
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px;max-width:100%;">
+        <button id="fbgr-debug-copy" type="button" style="padding:4px 8px;cursor:pointer;flex:0 0 auto;">複製</button>
       </div>
-      <div id="fbgr-debug-content">
+      <div id="fbgr-debug-content" style="max-width:100%;overflow:hidden;overflow-wrap:anywhere;word-break:break-word;white-space:normal;">
         ${summaryRows}
         ${postRows}
       </div>
@@ -6058,8 +7036,7 @@
     if (!root) return;
 
     const observer = new MutationObserver((mutations) => {
-      const addedNodes = mutations.some((mutation) => mutation.addedNodes && mutation.addedNodes.length > 0);
-      if (addedNodes) {
+      if (mutationsHaveRelevantAddedNodes(mutations)) {
         scheduleScan("mutation");
       }
     });
@@ -6161,8 +7138,13 @@
       getMonitoringControlAction,
       getPauseToggleAction,
       getMonitoringControlLabel,
+      getInitializedScopeSet,
+      isScopeInitialized,
+      markScopeInitialized,
+      clearScopeInitialized,
       isGroupInitialized,
       markGroupInitialized,
+      clearGroupInitialized,
       buildKeywordConfigPatch,
       buildRefreshConfigPatch,
       buildRefreshSettingsPayloadFromConfig,
@@ -6179,12 +7161,26 @@
       getPanelPositionBounds,
       clampPanelPosition,
       buildDraggedPanelPosition,
+      getMutationNodeElement,
+      isOwnScriptUiElement,
+      mutationHasRelevantAddedNode,
+      mutationsHaveRelevantAddedNodes,
       clampTargetPostCount,
       getCandidateCollectionLimit,
       getDynamicMaxWindows,
       getDynamicSeenPostLimit,
       parseKeywordInput,
       matchRules,
+      getCurrentPostRouteId,
+      extractGroupPostRouteIdFromUrl,
+      isGroupPostPermalinkPage,
+      buildScanTargetScopeId,
+      getCurrentScanTarget,
+      isSupportedScanPage,
+      extractKnownLabelFromText,
+      findCommentSortLabelFromButtonText,
+      getCurrentCommentSortLabel,
+      getCurrentScanSortLabel,
       shouldUseTopPostShortcut,
       buildCanonicalGroupPostUrl,
       buildPermalinkDetails,
@@ -6196,17 +7192,29 @@
       isCommentPermalinkHref,
       extractCanonicalPermalinkFromHref,
       getPostContainerSourceLabel,
+      getCommentContainerSourceLabel,
       buildPermalinkWarmupState,
+      buildCommentPermalinkDetails,
+      buildCanonicalGroupCommentUrl,
+      extractCommentPermalinkDetails,
+      isLikelyNonBodyCommentText,
+      isLikelyCommentAuthorText,
+      extractCommentAuthor,
+      isLikelyCommentContainer,
+      findCommentContainerFromPermalinkAnchor,
       collectPostIdSourceValues,
       extractPostIdFromValue,
+      extractCommentIdFromValue,
       extractMetadataPostIdFromValue,
       extractPostId,
       hasCommentActionTrail,
       stripCommentActionTrail,
       cleanExtractedText,
+      extractCommentTextDetails,
       getNonPostReason,
       createSeenPostStopState,
       applySeenPostStopObservation,
+      getWindowCollectionStopReason,
       buildStableTextSignature,
       buildPostKeyFragments,
       buildCompositePostKey,
@@ -6221,6 +7229,7 @@
       setLatestScanPostsForGroup,
       getSeenPostGroupStore,
       setSeenPostGroupStore,
+      getLatestSeenMapForScope,
       hasSeenPost,
       markPostSeen,
       clearSeenPostsForGroup,

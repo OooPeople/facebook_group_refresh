@@ -8,6 +8,7 @@ const source = fs.readFileSync(userScriptPath, "utf8");
 const TEST_GROUP_ID = "123456789012345";
 const OTHER_GROUP_ID = "999999999999999";
 const TEST_POST_ID = "9876543210123456";
+const TEST_COMMENT_ID = "1112223334445556";
 const TEST_GROUP_POST_URL = `https://www.facebook.com/groups/${TEST_GROUP_ID}/posts/${TEST_POST_ID}`;
 const TEST_PHOTO_GM_HREF =
   `https://www.facebook.com/photo/?fbid=1234567890&set=gm.${TEST_POST_ID}&idorvanity=${TEST_GROUP_ID}`;
@@ -18,7 +19,7 @@ const PER_GROUP_KEY_PREFIXES = Object.freeze({
   latestScanPosts: "fb_group_refresh_latest_scan_posts:",
 });
 const PERMALINK_ANCHOR_SELECTOR =
-  'a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]';
+  'a[href*="/groups/"][href*="/posts/"], a[href*="/groups/"][href*="/post/"], a[href*="/permalink/"], a[href*="multi_permalinks="], a[href*="story_fbid="], a[href*="set=gm."]';
 
 function assert(condition, message) {
   if (!condition) {
@@ -54,15 +55,30 @@ function createFakeElement(context, options = {}) {
     attributes = {},
     dataset = {},
     innerHTML = "",
+    innerText = "",
+    textContent = "",
     id = "",
     href = "",
+    parentElement = null,
+    closestResult = null,
+    contains = null,
+    matches = () => false,
+    querySelector = () => null,
     querySelectorAll = () => [],
+    rect = { width: 100, height: 20, top: 0, bottom: 20 },
   } = options;
   const element = new context.HTMLElement();
   element.dataset = { ...dataset };
   element.innerHTML = innerHTML;
+  element.innerText = innerText;
+  element.textContent = textContent || innerText;
   element.id = id;
+  element.parentElement = parentElement;
+  element.matches = matches;
+  element.querySelector = querySelector;
   element.querySelectorAll = querySelectorAll;
+  element.contains = contains || ((node) => node === element);
+  element.getBoundingClientRect = () => rect;
   element.getAttribute = (name) => {
     if (name === "href" && href) {
       return href;
@@ -72,6 +88,7 @@ function createFakeElement(context, options = {}) {
   if (href) {
     element.href = href;
   }
+  element.closest = () => (closestResult === "self" ? element : closestResult);
   return element;
 }
 
@@ -80,20 +97,38 @@ function createFakeAnchor(context, options = {}) {
     attributes = {},
     dataset = {},
     innerHTML = "",
+    innerText = "",
+    textContent = "",
     id = "",
     href = "",
+    parentElement = null,
+    closestResult = null,
+    contains = null,
+    matches = () => false,
+    querySelector = () => null,
+    querySelectorAll = () => [],
+    rect = { width: 100, height: 20, top: 0, bottom: 20 },
   } = options;
   const anchor = new context.HTMLAnchorElement();
   anchor.dataset = { ...dataset };
   anchor.innerHTML = innerHTML;
+  anchor.innerText = innerText;
+  anchor.textContent = textContent || innerText;
   anchor.id = id;
   anchor.href = href;
+  anchor.parentElement = parentElement;
+  anchor.matches = matches;
+  anchor.querySelector = querySelector;
+  anchor.querySelectorAll = querySelectorAll;
+  anchor.contains = contains || ((node) => node === anchor);
+  anchor.getBoundingClientRect = () => rect;
   anchor.getAttribute = (name) => {
     if (name === "href") {
       return anchor.href || "";
     }
     return Object.prototype.hasOwnProperty.call(attributes, name) ? attributes[name] : "";
   };
+  anchor.closest = () => (closestResult === "self" ? anchor : closestResult);
   return anchor;
 }
 
@@ -179,6 +214,12 @@ function createTestContext() {
         };
       },
     },
+    getComputedStyle() {
+      return {
+        display: "block",
+        visibility: "visible",
+      };
+    },
     Notification: function Notification() {},
     GM_getValue(key, fallback = null) {
       return gmStore.has(key) ? gmStore.get(key) : fallback;
@@ -222,6 +263,13 @@ function loadTestHooks() {
   const hooks = context.__FB_GROUP_REFRESH_TEST_HOOKS__;
   assert(hooks && typeof hooks === "object", "Missing exported test hooks.");
   return { hooks, context };
+}
+
+function setTestLocation(context, href) {
+  const url = new URL(href);
+  context.location.href = url.href;
+  context.location.hostname = url.hostname;
+  context.location.pathname = url.pathname;
 }
 
 function runTest(name, fn) {
@@ -283,6 +331,31 @@ function runCoreBehaviorTests(hooks) {
       false,
       "Duplicate initialization should be ignored."
     );
+    assertEqual(
+      hooks.isScopeInitialized("123456789012345:post:9876543210123456:comments"),
+      false,
+      "Comment scopes should start uninitialized."
+    );
+    assertEqual(
+      hooks.markScopeInitialized("123456789012345:post:9876543210123456:comments"),
+      true,
+      "First comment scope initialization should succeed."
+    );
+    assertEqual(
+      hooks.isScopeInitialized("123456789012345:post:9876543210123456:comments"),
+      true,
+      "Initialized comment scope should be tracked."
+    );
+    assertEqual(
+      hooks.clearScopeInitialized("123456789012345:post:9876543210123456:comments"),
+      true,
+      "Clearing an initialized comment scope should succeed."
+    );
+    assertEqual(
+      hooks.isScopeInitialized("123456789012345:post:9876543210123456:comments"),
+      false,
+      "Cleared comment scope should no longer be initialized."
+    );
   });
 
   runTest("text normalization helpers", () => {
@@ -306,6 +379,150 @@ function runCoreBehaviorTests(hooks) {
       "abc123中文",
       "Stable signature should reuse normalized key shape."
     );
+  });
+}
+
+function runScanTargetTests(hooks, context) {
+  runTest("scan target detection", () => {
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/`);
+    assertEqual(
+      hooks.getCurrentPostRouteId(),
+      "",
+      "Group feed routes should not expose a parent post id."
+    );
+    assertDeepEqual(
+      hooks.getCurrentScanTarget(),
+      {
+        kind: "posts",
+        groupId: TEST_GROUP_ID,
+        parentPostId: "",
+        scopeId: TEST_GROUP_ID,
+        supported: true,
+      },
+      "Group feed routes should use the existing group-scoped posts target."
+    );
+    assertEqual(
+      hooks.isSupportedScanPage(),
+      true,
+      "Group feed routes should be supported scan pages."
+    );
+
+    setTestLocation(context, TEST_GROUP_POST_URL);
+    assertEqual(
+      hooks.getCurrentPostRouteId(),
+      TEST_POST_ID,
+      "Group post routes should expose the parent post id."
+    );
+    assertEqual(
+      hooks.isGroupPostPermalinkPage(),
+      true,
+      "Group post routes should be detected as permalink pages."
+    );
+    assertDeepEqual(
+      hooks.getCurrentScanTarget(),
+      {
+        kind: "comments",
+        groupId: TEST_GROUP_ID,
+        parentPostId: TEST_POST_ID,
+        scopeId: `${TEST_GROUP_ID}:post:${TEST_POST_ID}:comments`,
+        supported: true,
+      },
+      "Group post routes should use a comments target scoped to the parent post."
+    );
+
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/post/${TEST_POST_ID}/`);
+    assertEqual(
+      hooks.getCurrentPostRouteId(),
+      TEST_POST_ID,
+      "Singular group /post/ routes should also expose the parent post id."
+    );
+    assertDeepEqual(
+      hooks.extractCanonicalPermalinkFromHref(
+        `https://www.facebook.com/groups/${TEST_GROUP_ID}/post/${TEST_POST_ID}/`,
+        TEST_GROUP_ID
+      ),
+      {
+        permalink: TEST_GROUP_POST_URL,
+        source: "groups_post_anchor",
+      },
+      "Singular group /post/ routes should canonicalize to the stable /posts/ URL."
+    );
+    assertEqual(
+      hooks.buildScanTargetScopeId("posts", TEST_GROUP_ID),
+      TEST_GROUP_ID,
+      "Posts target scope should remain the existing group id for compatibility."
+    );
+    assertEqual(
+      hooks.buildScanTargetScopeId("comments", TEST_GROUP_ID, TEST_POST_ID),
+      `${TEST_GROUP_ID}:post:${TEST_POST_ID}:comments`,
+      "Comments target scope should include the parent post id."
+    );
+
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/permalink/${TEST_POST_ID}/`);
+    assertEqual(
+      hooks.getCurrentPostRouteId(),
+      TEST_POST_ID,
+      "Group permalink routes should also resolve the parent post id."
+    );
+
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/?story_fbid=${TEST_POST_ID}`);
+    assertEqual(
+      hooks.getCurrentPostRouteId(),
+      TEST_POST_ID,
+      "Group query routes with story_fbid should resolve the parent post id."
+    );
+
+    setTestLocation(context, "https://www.facebook.com/profile.php?id=123");
+    assertDeepEqual(
+      hooks.getCurrentScanTarget(),
+      {
+        kind: "posts",
+        groupId: "",
+        parentPostId: "",
+        scopeId: "",
+        supported: false,
+      },
+      "Unsupported Facebook routes should not produce a supported scan target."
+    );
+
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/`);
+  });
+
+  runTest("comment sort detection", () => {
+    setTestLocation(context, TEST_GROUP_POST_URL);
+
+    const sortButton = createFakeElement(context, {
+      innerText: "由新到舊",
+    });
+    context.document.querySelectorAll = (selector) => {
+      if (selector.includes('[role="button"]')) return [sortButton];
+      if (selector.includes('span[dir="auto"]')) return [];
+      return [];
+    };
+
+    assertEqual(
+      hooks.findCommentSortLabelFromButtonText("由新到舊"),
+      "由新到舊",
+      "Comment sort button text should resolve the newest-first label."
+    );
+    assertEqual(
+      hooks.findCommentSortLabelFromButtonText("由新到舊 顯示所有留言，且最新的留言顯示在最上方。"),
+      "",
+      "Comment sort option descriptions should not be mistaken for the current sort button."
+    );
+    assertEqual(
+      hooks.getCurrentCommentSortLabel(),
+      "由新到舊",
+      "Comment sort detection should read the visible sort button label."
+    );
+    assertEqual(
+      hooks.getCurrentScanSortLabel(),
+      "由新到舊",
+      "Scan sort detection should route comment targets to comment sort detection."
+    );
+
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/`);
+    context.document.querySelectorAll = () => [];
   });
 }
 
@@ -491,6 +708,35 @@ function runConfigAndLayoutTests(hooks) {
       ),
       { top: 12, left: 888 },
       "Drag helper should apply pointer deltas and clamp the final position."
+    );
+  });
+
+  runTest("userscript UI mutations are ignored by observer filter", () => {
+    const { hooks, context } = loadTestHooks();
+    const body = createFakeElement(context);
+    const panel = createFakeElement(context, { id: "fb-group-refresh-panel", closestResult: "self" });
+    const modalChild = createFakeElement(context, { closestResult: panel });
+    const pageNode = createFakeElement(context);
+
+    assertEqual(
+      hooks.isOwnScriptUiElement(panel),
+      true,
+      "Panel element should be treated as own userscript UI."
+    );
+    assertEqual(
+      hooks.mutationHasRelevantAddedNode({ target: body, addedNodes: [panel] }),
+      false,
+      "Adding the userscript panel should not schedule a scan."
+    );
+    assertEqual(
+      hooks.mutationHasRelevantAddedNode({ target: panel, addedNodes: [modalChild] }),
+      false,
+      "Mutations inside userscript UI should not schedule a scan."
+    );
+    assertEqual(
+      hooks.mutationHasRelevantAddedNode({ target: body, addedNodes: [pageNode] }),
+      true,
+      "Facebook page content mutations should still schedule scans."
     );
   });
 
@@ -765,6 +1011,16 @@ function runPermalinkHelperTests(hooks) {
       "Canonical group post URL builder should use the normalized ids."
     );
     assertEqual(
+      hooks.buildCanonicalGroupCommentUrl(TEST_GROUP_ID, TEST_POST_ID, TEST_COMMENT_ID),
+      `${TEST_GROUP_POST_URL}/?comment_id=${TEST_COMMENT_ID}`,
+      "Canonical group comment URL builder should include group, post, and comment ids."
+    );
+    assertEqual(
+      hooks.buildCanonicalGroupCommentUrl(TEST_GROUP_ID, TEST_POST_ID, "short"),
+      "",
+      "Canonical group comment URL builder should reject invalid comment ids."
+    );
+    assertEqual(
       hooks.buildCanonicalGroupPostUrl(TEST_GROUP_ID, "short"),
       "",
       "Canonical group post URL builder should reject invalid post ids."
@@ -963,6 +1219,21 @@ function runPostIdExtractionTests(hooks, context) {
       TEST_POST_ID,
       "Metadata post id extractor should read ft_ent_identifier."
     );
+    assertEqual(
+      hooks.extractCommentIdFromValue(`${TEST_GROUP_POST_URL}/?comment_id=${TEST_COMMENT_ID}`),
+      TEST_COMMENT_ID,
+      "Comment id extractor should read comment_id query params."
+    );
+    assertEqual(
+      hooks.extractCommentIdFromValue(`${TEST_GROUP_POST_URL}/?reply_comment_id=${TEST_COMMENT_ID}`),
+      TEST_COMMENT_ID,
+      "Comment id extractor should read reply_comment_id query params."
+    );
+    assertEqual(
+      hooks.extractCommentIdFromValue(`"feedback_comment_id":"${TEST_COMMENT_ID}"`),
+      TEST_COMMENT_ID,
+      "Comment id extractor should read metadata comment ids."
+    );
 
     const metadataContainer = createMetadataContainer(
       context,
@@ -1032,6 +1303,135 @@ function runPostIdExtractionTests(hooks, context) {
       }),
       "",
       "Primary post text should not be misclassified as comment content."
+    );
+  });
+}
+
+function runCommentExtractionTests(hooks, context) {
+  runTest("comment container skips timestamp-only wrappers", () => {
+    const commentHref = `${TEST_GROUP_POST_URL}/?comment_id=${TEST_COMMENT_ID}`;
+    const commentTextNode = createFakeElement(context, {
+      innerText: "販售 5/31 內野熱區 2張",
+    });
+    const authorAnchor = createFakeAnchor(context, {
+      href: `https://www.facebook.com/groups/${TEST_GROUP_ID}/user/1234567890`,
+      innerText: "Alice",
+    });
+    const timeAnchor = createFakeAnchor(context, {
+      href: commentHref,
+      innerText: "8分鐘",
+    });
+    const timestampContainer = createFakeElement(context, {
+      innerText: "8分鐘",
+      querySelector: (selector) => selector.includes("comment_id") ? timeAnchor : null,
+      contains: (node) => node === timeAnchor,
+    });
+    const fullCommentContainer = createFakeElement(context, {
+      innerText: "Alice 販售 5/31 內野熱區 2張 8分鐘 讚 回覆",
+      querySelector: (selector) => {
+        if (selector.includes("comment_id")) return timeAnchor;
+        return null;
+      },
+      querySelectorAll: (selector) => {
+        if (selector.includes('dir="auto"')) return [commentTextNode];
+        if (selector.includes("a[")) return [authorAnchor, timeAnchor];
+        return [];
+      },
+      contains: (node) => [timeAnchor, commentTextNode, authorAnchor].includes(node),
+    });
+
+    timeAnchor.parentElement = timestampContainer;
+    timestampContainer.parentElement = fullCommentContainer;
+
+    assertEqual(
+      hooks.isLikelyCommentContainer(timestampContainer, timeAnchor),
+      false,
+      "Timestamp-only wrappers should not be accepted as comment containers."
+    );
+    assertEqual(
+      hooks.isLikelyCommentContainer(fullCommentContainer, timeAnchor),
+      true,
+      "Containers with real comment text should be accepted."
+    );
+    assertEqual(
+      hooks.findCommentContainerFromPermalinkAnchor(timeAnchor),
+      fullCommentContainer,
+      "Comment container lookup should climb past the timestamp wrapper."
+    );
+    assertDeepEqual(
+      hooks.extractCommentTextDetails(fullCommentContainer),
+      {
+        text: "販售 5/31 內野熱區 2張",
+        rawText: "販售 5/31 內野熱區 2張",
+        source: "comment",
+      },
+      "Comment text extraction should use body text rather than permalink time."
+    );
+    const duplicatedTextContainer = createFakeElement(context, {
+      innerText: "Alice #售 5/30 L4 404區2排一張 app轉票 #售 5/30 L4 404區2排一張 app轉票 8分鐘 讚 回覆",
+      querySelectorAll: (selector) => {
+        if (selector.includes('dir="auto"')) {
+          return [
+            createFakeElement(context, {
+              innerText: "#售 5/30 L4 404區2排一張 app轉票 #售 5/30 L4 404區2排一張 app轉票",
+            }),
+          ];
+        }
+        return [];
+      },
+    });
+    assertDeepEqual(
+      hooks.extractCommentTextDetails(duplicatedTextContainer),
+      {
+        text: "#售 5/30 L4 404區2排一張 app轉票",
+        rawText: "#售 5/30 L4 404區2排一張 app轉票",
+        source: "comment",
+      },
+      "Comment text extraction should collapse repeated adjacent body text from Facebook DOM."
+    );
+    assertEqual(
+      hooks.extractCommentAuthor(fullCommentContainer),
+      "Alice",
+      "Comment author extraction should read the author link and skip timestamp links."
+    );
+    assertEqual(
+      hooks.isLikelyCommentAuthorText("#售"),
+      false,
+      "Comment author text should reject hashtag labels."
+    );
+
+    const parentAuthorAnchor = createFakeAnchor(context, {
+      href: `https://www.facebook.com/groups/${TEST_GROUP_ID}/user/999999999`,
+      innerText: "Parent Author",
+      rect: { width: 100, height: 20, top: 20, bottom: 40 },
+    });
+    const nearbyAuthorAnchor = createFakeAnchor(context, {
+      href: `https://www.facebook.com/groups/${TEST_GROUP_ID}/user/222222222`,
+      innerText: "Nearby Commenter",
+      rect: { width: 100, height: 20, top: 380, bottom: 400 },
+    });
+    const nearbyTimeAnchor = createFakeAnchor(context, {
+      href: commentHref,
+      innerText: "8分鐘",
+      rect: { width: 80, height: 20, top: 410, bottom: 430 },
+    });
+    const nearbyHashtagAnchor = createFakeAnchor(context, {
+      href: "https://www.facebook.com/hashtag/%E5%BE%B5%E7%A5%A8",
+      innerText: "#徵票",
+      rect: { width: 80, height: 20, top: 405, bottom: 425 },
+    });
+    const oversizedContainer = createFakeElement(context, {
+      querySelectorAll: (selector) => {
+        if (selector.includes("a[")) {
+          return [parentAuthorAnchor, nearbyAuthorAnchor, nearbyHashtagAnchor, nearbyTimeAnchor];
+        }
+        return [];
+      },
+    });
+    assertEqual(
+      hooks.extractCommentAuthor(oversizedContainer, nearbyTimeAnchor),
+      "Nearby Commenter",
+      "Comment author extraction should prefer the closest real author and skip hashtag links."
     );
   });
 }
@@ -1168,6 +1568,56 @@ function runIdentityAndStoreTests(hooks, context) {
     );
   });
 
+  runTest("comment key aliases stay separate from post keys", () => {
+    const commentPermalink = `${TEST_GROUP_POST_URL}/?comment_id=${TEST_COMMENT_ID}`;
+    const comment = {
+      itemKind: "comment",
+      commentId: TEST_COMMENT_ID,
+      parentPostId: TEST_POST_ID,
+      permalink: commentPermalink,
+      author: "Carol",
+      text: "Alpha ticket in comment",
+    };
+    const fallbackOnlyComment = {
+      itemKind: "comment",
+      parentPostId: TEST_POST_ID,
+      author: "Carol",
+      text: "Alpha ticket in comment",
+    };
+
+    assertEqual(
+      hooks.getPostKey(comment),
+      `comment:${TEST_COMMENT_ID}`,
+      "Comment id should win as the primary comment key."
+    );
+    assertDeepEqual(
+      hooks.getPostKeyAliases(comment),
+      [
+        `comment:${TEST_COMMENT_ID}`,
+        `comment-url:${commentPermalink}`,
+        `post:${TEST_POST_ID}||author:carol||text:alphaticketincomment`,
+        "comment-fallback:author:carol||text:alphaticketincomment",
+        "carol||alphaticketincomment",
+        commentPermalink,
+      ],
+      "Comments should expose comment id, permalink, parent-post composite, and fallback aliases."
+    );
+    assertEqual(
+      hooks.getPostKey(fallbackOnlyComment),
+      `post:${TEST_POST_ID}||author:carol||text:alphaticketincomment`,
+      "Fallback comment keys should include the parent post id when available."
+    );
+    assertEqual(
+      hooks.getPostKey({
+        postId: TEST_COMMENT_ID,
+        author: "Carol",
+        text: "Alpha ticket in comment",
+      }),
+      `id:${TEST_COMMENT_ID}`,
+      "Normal posts should keep the existing post id key behavior."
+    );
+  });
+
   runTest("seen-post aliases survive missing permalink in later scans", () => {
     const groupId = "123456789012345";
     const canonicalPost = {
@@ -1188,6 +1638,77 @@ function runIdentityAndStoreTests(hooks, context) {
       hooks.hasSeenPost(groupId, fallbackOnlyPost),
       true,
       "Seen-post lookup should still match when a later extraction only has fallback identity."
+    );
+  });
+
+  runTest("comment seen scopes stay isolated from group feed scopes", () => {
+    clearGroupStateStorage(context);
+    const postScope = TEST_GROUP_ID;
+    const firstCommentScope = `${TEST_GROUP_ID}:post:${TEST_POST_ID}:comments`;
+    const secondCommentScope = `${TEST_GROUP_ID}:post:2222222222222222:comments`;
+    const comment = {
+      itemKind: "comment",
+      commentId: TEST_COMMENT_ID,
+      parentPostId: TEST_POST_ID,
+      permalink: `${TEST_GROUP_POST_URL}/?comment_id=${TEST_COMMENT_ID}`,
+      author: "Carol",
+      text: "Alpha ticket in comment",
+    };
+    const post = {
+      postId: TEST_POST_ID,
+      permalink: TEST_GROUP_POST_URL,
+      author: "Alice",
+      text: "Alpha ticket available",
+    };
+
+    hooks.markPostSeen(firstCommentScope, comment);
+    hooks.markPostSeen(postScope, post);
+
+    assertEqual(
+      hooks.hasSeenPost(firstCommentScope, comment),
+      true,
+      "Comment scope should contain its own comment seen record."
+    );
+    assertEqual(
+      hooks.hasSeenPost(postScope, comment),
+      false,
+      "Group feed scope should not inherit comment seen records."
+    );
+    assertEqual(
+      hooks.hasSeenPost(secondCommentScope, comment),
+      false,
+      "Another post's comment scope should not inherit this comment seen record."
+    );
+    assertEqual(
+      hooks.hasSeenPost(postScope, post),
+      true,
+      "Group feed scope should retain normal post seen records."
+    );
+
+    hooks.clearSeenPostsForGroup(firstCommentScope);
+
+    assertEqual(
+      hooks.hasSeenPost(firstCommentScope, comment),
+      false,
+      "Clearing one comment scope should remove that scope's seen state."
+    );
+    assertEqual(
+      hooks.hasSeenPost(postScope, post),
+      true,
+      "Clearing one comment scope should not remove group feed seen state."
+    );
+  });
+
+  runTest("window collection stops on stagnant scan windows", () => {
+    assertEqual(
+      hooks.getWindowCollectionStopReason(8, 10, { meta: {} }, 3),
+      "已連續 3 輪沒有新增項目，停止深度掃描",
+      "Load-more collection should stop before the safety cap when no new items appear."
+    );
+    assertEqual(
+      hooks.getWindowCollectionStopReason(10, 10, { meta: {} }, 0),
+      "已達目標貼文數",
+      "Target count should still win as the normal stop reason."
     );
   });
 
@@ -1661,8 +2182,10 @@ function runTests(hooks, context) {
   runCoreBehaviorTests(hooks);
   runConfigAndLayoutTests(hooks);
   runGroupScopedConfigTests(hooks, context);
+  runScanTargetTests(hooks, context);
   runPermalinkHelperTests(hooks);
   runPostIdExtractionTests(hooks, context);
+  runCommentExtractionTests(hooks, context);
   runIdentityAndStoreTests(hooks, context);
   runPresentationTests(hooks);
   runRuntimeStateTests(hooks);

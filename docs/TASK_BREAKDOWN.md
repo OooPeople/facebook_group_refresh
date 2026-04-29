@@ -35,6 +35,7 @@
 - [x] 保留舊文件作為歷史與完成紀錄。
 - [x] 建立 `ARCHITECTURE_PLAN.md` 作為目前架構索引。
 - [x] 建立 `TASK_BREAKDOWN.md` 作為後續任務入口。
+- [x] 建立 `COMMENT_MONITOR_PLAN.md` 作為單篇貼文留言監控的詳細實作計畫。
 - [ ] 等下一個具體任務明確後，再撰寫 `HANDOFF_PLAN.md`。
 
 可選的後續文件清理：
@@ -42,6 +43,10 @@
 - [ ] 視需要更新 `README.md` 的文件索引，標註哪些文件是目前入口、哪些是歷史紀錄。
 - [x] 將舊的 `V1_SPEC.md`、`REFACTOR_PLAN.md`、`STATE_REFACTOR_PLAN.md` 移到 `docs/archive/`。
 - [ ] 新增功能完成後，同步更新 `docs/USAGE.md`。
+
+## 目前具體功能計畫
+
+- [ ] 單篇貼文留言監控：依 [`COMMENT_MONITOR_PLAN.md`](./COMMENT_MONITOR_PLAN.md) 分階段實作、測試與回歸，且不得影響既有社團貼文監控功能。
 
 ## 新功能前置流程
 

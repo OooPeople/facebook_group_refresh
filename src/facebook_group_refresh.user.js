@@ -139,6 +139,7 @@
   ];
   const GROUP_NAVIGATION_LABELS = [
     "討論區",
+    "首頁",
     "精選",
     "關於",
     "成員",
@@ -148,6 +149,7 @@
     "影片",
     "reels",
     "discussion",
+    "home",
     "featured",
     "about",
     "members",
@@ -258,6 +260,12 @@
     authorUiLabels: /^(Like|Comment|Share|Most relevant)$/i,
   });
   const ROUTE_SETTLE_MS = 3000;
+  const COMMENT_DOM_SETTLE = Object.freeze({
+    pollIntervalMs: 700,
+    minWaitMs: 2800,
+    maxWaitMs: 5200,
+    stableObservationCount: 2,
+  });
   const NOTIFICATION_CHANNEL_DEFINITIONS = Object.freeze([
     { id: "gmDesktop", skippedStatus: "" },
     { id: "ntfy", skippedStatus: "ntfy_skipped" },
@@ -1661,6 +1669,11 @@
 
     const groupId = getCurrentGroupId();
     const exactPath = `/groups/${groupId}`;
+    const postHeaderName = getCurrentGroupNameFromPostHeader(groupId);
+    if (postHeaderName) {
+      return postHeaderName;
+    }
+
     const headingName = getCurrentGroupNameFromHeading();
     if (headingName) {
       return headingName;
@@ -1717,6 +1730,90 @@
     }
 
     return "";
+  }
+
+  function isLikelyGroupNameText(value) {
+    const text = normalizeText(value);
+    if (!text || text.length < 2 || text.length > 120) return false;
+    if (text.startsWith("#")) return false;
+    if (isLikelyNoisySeparatedText(text)) return false;
+    if (isLikelyGroupNavigationLabel(text)) return false;
+    if (FEED_SORT_LABELS.includes(text) || COMMENT_SORT_LABELS.includes(text)) return false;
+    if (isLikelyCommentSortOptionText(text)) return false;
+    if (isLikelyTimestampAnchorText(text)) return false;
+    return true;
+  }
+
+  function isLikelyNoisySeparatedText(value) {
+    const parts = normalizeText(value).split(" ").filter(Boolean);
+    if (parts.length < 10) return false;
+
+    const shortParts = parts.filter((part) => part.length <= 1).length;
+    return shortParts / parts.length >= 0.7;
+  }
+
+  function getGroupRoutePathname(value) {
+    try {
+      return new URL(value || "", location.origin).pathname.replace(/\/+$/, "");
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function scorePostHeaderGroupNameCandidate(node, text, groupId) {
+    if (!(node instanceof HTMLElement)) return 0;
+
+    const link = node.closest?.(`a[href*="/groups/${groupId}"]`);
+    if (!(link instanceof HTMLAnchorElement)) return 0;
+
+    const pathname = getGroupRoutePathname(link?.href || link?.getAttribute?.("href") || "");
+    if (pathname !== `/groups/${groupId}`) return 0;
+
+    const rect = node.getBoundingClientRect();
+    let score = 0;
+
+    score += 11;
+    if (rect.top >= -40 && rect.top <= Math.max(360, Math.round(window.innerHeight * 0.5))) {
+      score += 3;
+    }
+    if (text.length >= 4) score += 1;
+
+    return score;
+  }
+
+  function collectPostHeaderGroupNameCandidates(groupId) {
+    if (!isGroupPostPermalinkPage()) return [];
+
+    const candidates = [];
+    const seen = new Set();
+    const nodes = document.querySelectorAll(
+      [
+        `[role="main"] a[href*="/groups/${groupId}"] span`,
+        `[role="main"] a[href*="/groups/${groupId}"]`,
+      ].join(",")
+    );
+
+    for (const node of nodes) {
+      if (!(node instanceof HTMLElement)) continue;
+      if (!isVisibleElement(node)) continue;
+
+      const text = normalizeText(node.innerText || node.textContent || "");
+      if (!isLikelyGroupNameText(text)) continue;
+      if (seen.has(text)) continue;
+
+      const score = scorePostHeaderGroupNameCandidate(node, text, groupId);
+      if (score <= 0) continue;
+
+      seen.add(text);
+      candidates.push({ text, score });
+    }
+
+    candidates.sort((a, b) => b.score - a.score || b.text.length - a.text.length);
+    return candidates;
+  }
+
+  function getCurrentGroupNameFromPostHeader(groupId = getCurrentGroupId()) {
+    return collectPostHeaderGroupNameCandidates(groupId)[0]?.text || "";
   }
 
   // 判斷文字是否比較像社團頁籤或導覽按鈕，而不是社團名稱。
@@ -4804,6 +4901,64 @@
     };
   }
 
+  function buildCommentCandidateListSignature(candidates) {
+    return (Array.isArray(candidates) ? candidates : []).map((candidate) => {
+      return [
+        candidate.commentAnchorHref || "",
+        candidate.textFingerprint || "",
+        Math.round(Number(candidate.top) || 0),
+      ].join("|");
+    }).join(";");
+  }
+
+  function shouldContinueCommentDomSettle({
+    candidateCount,
+    targetPostCount,
+    elapsedMs,
+    stableObservationCount,
+  }) {
+    if (candidateCount >= targetPostCount) return false;
+    if (elapsedMs >= COMMENT_DOM_SETTLE.maxWaitMs) return false;
+    if (
+      elapsedMs >= COMMENT_DOM_SETTLE.minWaitMs &&
+      stableObservationCount >= COMMENT_DOM_SETTLE.stableObservationCount
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  async function collectSettledCommentCandidates(targetPostCount) {
+    const limit = getCandidateCollectionLimit(targetPostCount);
+    let bestCandidates = collectCommentContainers(limit);
+    let lastSignature = buildCommentCandidateListSignature(bestCandidates);
+    let stableObservationCount = 0;
+    const startedAt = Date.now();
+
+    while (shouldContinueCommentDomSettle({
+      candidateCount: bestCandidates.length,
+      targetPostCount,
+      elapsedMs: Date.now() - startedAt,
+      stableObservationCount,
+    })) {
+      await sleep(COMMENT_DOM_SETTLE.pollIntervalMs);
+
+      const nextCandidates = collectCommentContainers(limit);
+      const nextSignature = buildCommentCandidateListSignature(nextCandidates);
+      stableObservationCount = nextSignature === lastSignature
+        ? stableObservationCount + 1
+        : 0;
+      lastSignature = nextSignature;
+
+      if (nextCandidates.length >= bestCandidates.length) {
+        bestCandidates = nextCandidates;
+      }
+    }
+
+    return bestCandidates;
+  }
+
   async function collectCurrentCommentWindowOnlyResult(context, initialCandidates) {
     const { result, scanCache, scanTarget, targetPostCount } = context;
 
@@ -4822,11 +4977,9 @@
   async function collectLoadedCommentsOnly(scanTarget) {
     const targetPostCount = clampTargetPostCount(STATE.config.maxPostsPerScan);
     const scanCache = new WeakMap();
-    const { candidates, collected, posts } = await collectCurrentWindowComments(
-      targetPostCount,
-      scanTarget,
-      scanCache
-    );
+    const candidates = await collectSettledCommentCandidates(targetPostCount);
+    const collected = await collectCommentsFromCandidates(candidates, scanTarget, scanCache);
+    const posts = dedupeExtractedPosts(collected.posts, targetPostCount);
     const meta = buildSingleWindowCollectedMeta({
       targetCount: targetPostCount,
       candidateCount: candidates.length,
@@ -7172,6 +7325,9 @@
       parseKeywordInput,
       matchRules,
       getCurrentPostRouteId,
+      isLikelyGroupNameText,
+      getCurrentGroupNameFromPostHeader,
+      getCurrentGroupName,
       extractGroupPostRouteIdFromUrl,
       isGroupPostPermalinkPage,
       buildScanTargetScopeId,
@@ -7193,6 +7349,8 @@
       extractCanonicalPermalinkFromHref,
       getPostContainerSourceLabel,
       getCommentContainerSourceLabel,
+      buildCommentCandidateListSignature,
+      shouldContinueCommentDomSettle,
       buildPermalinkWarmupState,
       buildCommentPermalinkDetails,
       buildCanonicalGroupCommentUrl,

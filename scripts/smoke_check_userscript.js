@@ -524,6 +524,70 @@ function runScanTargetTests(hooks, context) {
     setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/`);
     context.document.querySelectorAll = () => [];
   });
+
+  runTest("group name detection on post permalink pages", () => {
+    setTestLocation(context, TEST_GROUP_POST_URL);
+
+    const groupLink = createFakeAnchor(context, {
+      href: `https://www.facebook.com/groups/${TEST_GROUP_ID}`,
+    });
+    const homeLink = createFakeAnchor(context, {
+      href: `https://www.facebook.com/groups/${TEST_GROUP_ID}`,
+    });
+    const groupNameSpan = createFakeElement(context, {
+      innerText: "富邦悍將門票及商品買賣交流",
+      closestResult: groupLink,
+      rect: { width: 180, height: 20, top: 80, bottom: 100 },
+    });
+    const homeSpan = createFakeElement(context, {
+      innerText: "首頁",
+      closestResult: homeLink,
+      rect: { width: 40, height: 20, top: 60, bottom: 80 },
+    });
+    const noisySpan = createFakeElement(context, {
+      innerText: "t n o d o e p r S s 4 2 5 i 8 c f i t f h 9 2",
+      rect: { width: 200, height: 20, top: 90, bottom: 110 },
+    });
+    const postPermalinkLink = createFakeAnchor(context, {
+      href: `https://www.facebook.com/groups/${TEST_GROUP_ID}/posts/${TEST_POST_ID}`,
+    });
+    const postPermalinkSpan = createFakeElement(context, {
+      innerText: "不是社團名稱",
+      closestResult: postPermalinkLink,
+      rect: { width: 120, height: 20, top: 70, bottom: 90 },
+    });
+
+    context.document.querySelectorAll = (selector) => {
+      if (selector.includes('[role="main"]')) {
+        return [homeSpan, noisySpan, postPermalinkSpan, groupNameSpan];
+      }
+      return [];
+    };
+
+    assertEqual(
+      hooks.isLikelyGroupNameText("首頁"),
+      false,
+      "Home navigation labels should not be treated as group names."
+    );
+    assertEqual(
+      hooks.isLikelyGroupNameText(noisySpan.innerText),
+      false,
+      "Tokenized Facebook noise should not be treated as a group name."
+    );
+    assertEqual(
+      hooks.getCurrentGroupNameFromPostHeader(TEST_GROUP_ID),
+      "富邦悍將門票及商品買賣交流",
+      "Post permalink group-name detection should prefer the group header text."
+    );
+    assertEqual(
+      hooks.getCurrentGroupName(),
+      "富邦悍將門票及商品買賣交流",
+      "Current group name should use the post header name on permalink pages."
+    );
+
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/`);
+    context.document.querySelectorAll = () => [];
+  });
 }
 
 function runConfigAndLayoutTests(hooks) {
@@ -1432,6 +1496,46 @@ function runCommentExtractionTests(hooks, context) {
       hooks.extractCommentAuthor(oversizedContainer, nearbyTimeAnchor),
       "Nearby Commenter",
       "Comment author extraction should prefer the closest real author and skip hashtag links."
+    );
+  });
+
+  runTest("comment DOM settle policy waits for late-loaded comments", () => {
+    assertEqual(
+      hooks.shouldContinueCommentDomSettle({
+        candidateCount: 6,
+        targetPostCount: 10,
+        elapsedMs: 1500,
+        stableObservationCount: 3,
+      }),
+      true,
+      "Comment DOM settle should keep waiting before the minimum wait window."
+    );
+    assertEqual(
+      hooks.shouldContinueCommentDomSettle({
+        candidateCount: 6,
+        targetPostCount: 10,
+        elapsedMs: 3000,
+        stableObservationCount: 2,
+      }),
+      false,
+      "Comment DOM settle should stop after enough stable observations and minimum wait."
+    );
+    assertEqual(
+      hooks.shouldContinueCommentDomSettle({
+        candidateCount: 10,
+        targetPostCount: 10,
+        elapsedMs: 0,
+        stableObservationCount: 0,
+      }),
+      false,
+      "Comment DOM settle should stop immediately when the target count is already available."
+    );
+    assertEqual(
+      hooks.buildCommentCandidateListSignature([
+        { commentAnchorHref: "https://example.test/?comment_id=1", textFingerprint: "3:abc", top: 10.4 },
+      ]),
+      "https://example.test/?comment_id=1|3:abc|10",
+      "Comment candidate signatures should include identity, text fingerprint, and position."
     );
   });
 }

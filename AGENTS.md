@@ -1,99 +1,147 @@
 # facebook_group_refresh
 
-這是一個執行於 Facebook 社團頁面的 Tampermonkey 監控專案。
+這是一個執行於 Facebook 社團頁面的 Tampermonkey 監控專案。agent / AI 在本 repo 工作時，請把它視為「單檔 userscript 應用」，而不是要被改造成多檔前端專案或背景爬蟲服務。
 
-本專案刻意維持狹窄範圍：
+## 專案定位
 
-- 偵測符合使用者自訂關鍵字的新社團貼文
-- 透過使用者選擇啟用的通道，例如 `ntfy` 或 Discord，送出通知
-- 盡量減少頁面動作，避免不必要的自動化
+核心用途：
 
-## 目前狀態
+- 在使用者已登入 Facebook 的瀏覽器中監看單一社團頁。
+- 抽取少量最近貼文，套用 include / exclude 關鍵字規則。
+- 以 group-scoped seen state 做穩定去重。
+- 透過使用者明確啟用的通道送出通知，例如 `ntfy` 或 Discord。
+- 保持保守 refresh / scroll 掃描，避免不必要的頁面互動。
 
-- 已有可用的 Tampermonkey userscript，位於 `src/facebook_group_refresh.user.js`
-- 目前已實作的範圍包括：面板控制、include / exclude 比對、去重、debug 輸出、`ntfy` 與 Discord 支援、保守的 refresh / scroll 掃描，以及最小 Node smoke test
-- 除非使用者明確要求，否則不要加入大規模爬取、自動登入或互動類功能
+明確非目標：
 
-## 專案目標
+- 不處理帳號憑證、cookies、tokens、session IDs 或登入自動化。
+- 不加入繞過 anti-bot、CAPTCHA、OCR、stealth automation 或大量爬取能力。
+- 不自動發文、留言、按讚、加入社團、私訊或任何互動類功能。
+- 除非使用者明確要求，不建立 headless browser、背景服務、server crawler 或獨立排程器。
 
-- 優先採用瀏覽器內 userscript，而不是伺服器端爬取
-- 直接使用使用者既有的 Facebook 登入 session
-- 保持保守且帶隨機性的 refresh 節奏
-- 穩定去重貼文通知
-- 讓 selector、解析邏輯與通知傳送能相對獨立替換
+## 目前入口文件
 
-## 非目標
+較大修改前，先閱讀：
 
-- 不處理帳號憑證擷取或儲存
-- 不加入任何繞過或規避 anti-bot 的功能
-- 不自動發文、留言、按讚、加入社團、私訊或任何互動
-- 除非使用者明確要求獨立工具，否則不建立隱藏背景服務
+- `README.md`：專案總覽與使用入口。
+- `docs/ARCHITECTURE_PLAN.md`：目前架構、runtime 邊界與變更邊界。
+- `docs/TASK_BREAKDOWN.md`：任務分類、驗證清單與完成定義。
+- `GIT_COMMIT_RULES.md`：commit message 規則。
 
-## 預期目錄結構
+其他文件定位：
 
-- `README.md`：給人看的專案總覽與目前狀態
-- `AGENTS.md`：這個子目錄給 agent / AI 使用的工作說明
-- `GIT_COMMIT_RULES.md`：commit message 規則
-- `src/`：原始碼，包含目前使用中的 userscript
-- `scripts/`：本地驗證工具，例如 smoke test
-- `docs/`：可選的設計筆記與除錯說明
-- `fixtures/`：可選的 HTML 片段或截圖，且需先移除敏感資料
+- `src/facebook_group_refresh.user.js`：唯一實際使用的 Tampermonkey userscript。
+- `scripts/smoke_check_userscript.js`：最小 Node smoke test。
+- `docs/USAGE.md`：使用者操作說明；使用者可見行為變更時需同步更新。
+- `docs/SCRIPT_TEMPLATE_GUIDE.md`：把本專案作為其他單站監視腳本模板時使用。
+- `docs/archive/`：已完成的歷史規格與重構紀錄，不作為新任務的主要入口。
+- `docs/HANDOFF_PLAN.md`：任務交接文件；只有在有具體交接需求時再填。
 
-## 工作規則
+## 架構紀律
 
-- 在進行較大修改前，先閱讀 `README.md` 與 `GIT_COMMIT_RULES.md`
-- 第一版實作維持單一用途：單一社團頁、關鍵字比對、去重、通知
-- 優先使用可直接在 Tampermonkey 與目前 Chromium 瀏覽器執行的原生 JavaScript
-- 除非使用者要求，或維護收益非常明確，否則不要引入 bundler、框架或 package manager
-- 執行期設定集中在一個明顯的 config 物件中，不要把常數散落各處
-- 新增程式碼時，盡量分清這些責任：
-  - 頁面判斷與 selector
-  - 貼文抽取與正規化
-  - 關鍵字比對
-  - 去重狀態
-  - 通知 adapter
-  - UI / debug panel
+部署仍維持單一 `.user.js`。不要為了形式引入 bundler、框架、package manager 或多檔拆分；只有在使用者明確要求，或維護收益非常明確時才討論。
+
+新增或修改程式碼時，先判斷主要落在哪個區段：
+
+- `Storage / Config`
+- `Config Use Cases`
+- `Text / Common Utils`
+- `Matcher / Rules`
+- `Page Context / Scheduling`
+- `Extractor / DOM Collection`
+- `Post Parsing / Notification Formatting`
+- `Persistence / Dedupe / History`
+- `Scan Engine`
+- `Notifier`
+- `UI / Modal`
+- `Lifecycle / Observer`
+
+維護重點：
+
+- `STATE` 已分成 `config`、`scanRuntime`、`notificationRuntime`、`routeRuntime`、`uiRuntime`、`schedulerRuntime`、`sessionRuntime`。新增 state 時先分類，不要直接塞回頂層。
+- `set...Patch()` 是底層 mutation helper。新業務邏輯優先走有語義的 use case / apply helper，例如 `apply...ConfigPatch()`、`pauseMonitoring()`、`restartMonitoringForCurrentGroup()`，避免把 patch helper 當萬用入口。
+- `DEFAULT_CONFIG` 放正式使用者設定；`INTERNAL_CONFIG` 放內部 policy。不要把 internal-only 能力混入正式 config，除非它真的要成為 UI 可調功能。
+- runtime、persistence、DOM render、notification side effect 要盡量分清。若需要從 storage hydration runtime config，請讓 hydration 是明確動作，不要讓普通 read path 暗中改 state。
+- `Set` / `Map` 類 runtime 狀態不要在外部任意 mutate；優先透過既有語義 helper，例如 `isGroupInitialized()`、`markGroupInitialized()`。
+- scan orchestration 只做編排。新增抽取、判斷、統計、commit、shortcut 或 debug 資訊時，優先放在獨立 helper，不要把 `runScan()` 或主掃描幹線重新塞胖。
+- UI render 走 snapshot / view state。不要讓 render 直接承接 raw runtime 並混入 domain 判斷；UI event handler 也不要直接散寫 persistence 或 scan state。
+
+## 變更規則
+
+新增設定：
+
+- 更新 `DEFAULT_CONFIG`、config definition、config patch / persist helper。
+- 判斷是否需要 group-scoped storage。
+- 同步 settings modal、debug 顯示、`docs/USAGE.md` 與 smoke test。
+
+修改關鍵字語法：
+
+- 以 `Matcher / Rules` 為主要修改區。
+- 保留 include 空白代表「所有貼文先視為 include 命中」的語義，除非使用者明確要求改變。
+- exclude 命中應繼續優先抑制通知。
+
+修改 extractor / selector：
+
+- 優先使用穩定結構、URL、ARIA、資料屬性或文字錨點，避免依賴易變 CSS class。
+- 不要同一輪同時大改 selector / extractor 與 scan orchestration。
+- 若新增 fixture，必須先去識別化姓名、頭像、連結、ID 與私人內容。
+- `timestampText` / `timestampEpoch` 目前只保留欄位形狀，不做 Facebook DOM 時間抽取；沒有明確需求不要恢復。
+
+修改 scan / dedupe：
+
+- 檢查 baseline mode、top-post shortcut、seen-stop 與 group-scoped seen store 是否仍正確。
+- 同一篇貼文在 `postId`、permalink 或 fallback 欄位變動時，仍應盡量被視為同一篇。
+- 不要清掉其他社團的 seen state。
+- match history 目前是全域最近清單，不要重新切回 per-group，除非有明確需求。
+
+新增通知通道：
+
+- 遠端通知必須 opt-in。
+- 不要把 token、webhook、topic 寫入範例預設值。
+- 測試通知不得寫入 seen 或 match history。
+- 同步 notification registry、runner map、settings UI、`docs/USAGE.md` 與 smoke test。
+
+修改 lifecycle / scheduler：
+
+- Facebook 是 SPA，route change 後要保留 settle window。
+- 暫停時不應安排 scan 或 refresh。
+- 不要製造多個 observer、interval 或 timer handle。
+- panel 被 Facebook 重掛移除時仍需能補回。
 
 ## 安全與隱私
 
-- 不要提交 cookies、tokens、session IDs、browser storage dump，或包含私人資料的截圖
-- 若在 `fixtures/` 下加入 HTML 或截圖，應盡量去識別化姓名、頭像、連結與 ID
-- 外部通知端點必須是 opt-in，且在分享範例中預設關閉
-- 小型狀態例如 seen post ID 優先保存在本地瀏覽器儲存，不要導出帳號資料
+- 不提交 cookies、tokens、session IDs、browser storage dump 或包含私人資料的截圖。
+- 外部通知端點必須由使用者自行設定，分享範例預設關閉。
+- 小型狀態如 seen post ID 優先保存在本地瀏覽器儲存，不導出帳號資料。
+- 除頁面 refresh、本地瀏覽器儲存、保守 scroll / text expand 與明確通知傳送外，腳本應維持近似唯讀。
 
 ## 編碼偏好
 
-- 除非既有檔案本來就需要 Unicode，否則原始碼預設使用 ASCII
-- 使用清楚的命名與短函式
-- 只在邏輯不夠直觀時補上註解
-- 優先採用防禦性 DOM 存取與 graceful fallback，而不是脆弱假設
-- 若有穩定屬性、URL 或結構錨點，避免硬編碼易變的 CSS class 名稱
-
-## 變更邊界
-
-- 新增第三方依賴前先詢問
-- 新增任何預設會把資料送出本機的功能前先詢問
-- 新增 headless browser tooling、OCR、CAPTCHA handling 或 stealth automation 前先詢問
+- 原始碼優先使用可直接在 Tampermonkey 與目前 Chromium 瀏覽器執行的原生 JavaScript。
+- 除非既有檔案本來就需要 Unicode，否則原始碼預設使用 ASCII；文件可使用繁體中文。
+- 讀取文件時請明確使用 UTF-8；在 PowerShell 中優先使用 `Get-Content -Encoding utf8`，避免繁體中文文件被誤判編碼。
+- 使用清楚命名與短函式；只在邏輯不夠直觀時補註解。
+- 優先防禦性 DOM 存取與 graceful fallback，不寫脆弱假設。
+- 新增第三方依賴、預設外送資料、headless tooling、OCR、CAPTCHA 或 stealth automation 前，必須先詢問。
 
 ## 驗證
 
-- 最小 smoke test 位於 `scripts/smoke_check_userscript.js`
-- 建議驗證指令：
-  - `node scripts/smoke_check_userscript.js`
-- 若變更不算小，請在最終回覆中寫出手動驗證步驟
-- 若日後驗證方式改變，也要同步更新這份文件中的實際指令
+最小驗證指令：
+
+```powershell
+node .\scripts\smoke_check_userscript.js
+```
+
+需要補充手動驗證的情況：
+
+- 變更 DOM extractor、selector、scroll/load-more、route handling、panel UI、Tampermonkey 權限或通知端點。
+- 新增或改變使用者可見行為。
+
+手動驗證重點依 `docs/TASK_BREAKDOWN.md` 為準。若驗證方式改變，請同步更新本文件與相關 docs。
 
 ## Git 與 commit
 
-- 遵守 Conventional Commits
-- 每個 commit 保持小且單一主題
-- 若有助於理解，可使用明確 scope，例如 `docs`、`config`、`scripts` 或 `tampermonkey`
-- 詳細 commit message 規則請見 `GIT_COMMIT_RULES.md`
-
-## 目前實作的 guardrails
-
-- 除了頁面 refresh、本地瀏覽器儲存與明確通知傳送外，腳本應維持唯讀
-- 保留 include 與 exclude 關鍵字支援
-- 保留可見的 debug 模式，讓 selector 壞掉時仍可診斷
-- 盡可能以穩定 post identifier 做 dedupe；若做不到，才退回文字 signature 類 fallback
-- 通知通道維持 opt-in。本地通知可保留，但 `ntfy` 這類遠端通知必須由使用者自行設定
+- 遵守 Conventional Commits。
+- 每個 commit 保持小且單一主題。
+- 常見 scope 可用 `docs`、`config`、`scripts`、`tampermonkey`。
+- 詳細規則見 `GIT_COMMIT_RULES.md`。

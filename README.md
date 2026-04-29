@@ -83,11 +83,14 @@ facebook_group_refresh/
 │  └─ smoke_check_userscript.js
 ├─ docs/
 │  ├─ USAGE.md
-│  ├─ V1_SPEC.md
-│  ├─ REFACTOR_PLAN.md
-│  ├─ STATE_REFACTOR_PLAN.md
+│  ├─ ARCHITECTURE_PLAN.md
+│  ├─ TASK_BREAKDOWN.md
+│  ├─ HANDOFF_PLAN.md
 │  ├─ SCRIPT_TEMPLATE_GUIDE.md
-│  └─ TASK_BREAKDOWN.md
+│  └─ archive/
+│     ├─ V1_SPEC.md
+│     ├─ REFACTOR_PLAN.md
+│     └─ STATE_REFACTOR_PLAN.md
 ├─ AGENTS.md
 ├─ GIT_COMMIT_RULES.md
 ├─ .editorconfig
@@ -106,16 +109,16 @@ facebook_group_refresh/
 
 - [`scripts/smoke_check_userscript.js`](./scripts/smoke_check_userscript.js)
   Node smoke test，用來檢查 userscript metadata 與穩定純邏輯 helper。
-- [`docs/V1_SPEC.md`](./docs/V1_SPEC.md)
-  功能規格與設計方向。
-- [`docs/REFACTOR_PLAN.md`](./docs/REFACTOR_PLAN.md)
-  重構盤點、完成項目與後續原則。
-- [`docs/STATE_REFACTOR_PLAN.md`](./docs/STATE_REFACTOR_PLAN.md)
-  `STATE` 專題重構計畫，記錄 runtime 分區、mutation 入口與五輪重構步驟。
+- [`docs/ARCHITECTURE_PLAN.md`](./docs/ARCHITECTURE_PLAN.md)
+  目前架構、runtime 邊界、掃描流程與後續變更邊界。
+- [`docs/TASK_BREAKDOWN.md`](./docs/TASK_BREAKDOWN.md)
+  後續任務拆解、任務分類、手動驗證與完成定義。
+- [`docs/HANDOFF_PLAN.md`](./docs/HANDOFF_PLAN.md)
+  任務交接文件；目前保留空白，等下一個具體任務再填。
 - [`docs/SCRIPT_TEMPLATE_GUIDE.md`](./docs/SCRIPT_TEMPLATE_GUIDE.md)
   說明如何把這份腳本作為其他單站監視腳本模板。
-- [`docs/TASK_BREAKDOWN.md`](./docs/TASK_BREAKDOWN.md)
-  任務拆解與目前完成狀態。
+- [`docs/archive/`](./docs/archive/)
+  已完成的歷史規格與重構紀錄。
 - [`AGENTS.md`](./AGENTS.md)
   這個 repo 的 agent / AI 協作規則。
 - [`GIT_COMMIT_RULES.md`](./GIT_COMMIT_RULES.md)
@@ -165,8 +168,10 @@ node .\scripts\smoke_check_userscript.js
 ## 相關文件
 
 - [`docs/USAGE.md`](./docs/USAGE.md)
-- [`docs/V1_SPEC.md`](./docs/V1_SPEC.md)
-- [`docs/REFACTOR_PLAN.md`](./docs/REFACTOR_PLAN.md)
-- [`docs/STATE_REFACTOR_PLAN.md`](./docs/STATE_REFACTOR_PLAN.md)
-- [`docs/SCRIPT_TEMPLATE_GUIDE.md`](./docs/SCRIPT_TEMPLATE_GUIDE.md)
+- [`docs/ARCHITECTURE_PLAN.md`](./docs/ARCHITECTURE_PLAN.md)
 - [`docs/TASK_BREAKDOWN.md`](./docs/TASK_BREAKDOWN.md)
+- [`docs/HANDOFF_PLAN.md`](./docs/HANDOFF_PLAN.md)
+- [`docs/SCRIPT_TEMPLATE_GUIDE.md`](./docs/SCRIPT_TEMPLATE_GUIDE.md)
+- [`docs/archive/V1_SPEC.md`](./docs/archive/V1_SPEC.md)
+- [`docs/archive/REFACTOR_PLAN.md`](./docs/archive/REFACTOR_PLAN.md)
+- [`docs/archive/STATE_REFACTOR_PLAN.md`](./docs/archive/STATE_REFACTOR_PLAN.md)

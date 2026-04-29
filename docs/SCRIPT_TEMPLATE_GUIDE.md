@@ -579,10 +579,10 @@ Facebook 目前有：
 ├─ src/
 │  └─ <new-script>.user.js
 ├─ docs/
-│  ├─ REFACTOR_PLAN.md
+│  ├─ ARCHITECTURE_PLAN.md
 │  ├─ SCRIPT_TEMPLATE_GUIDE.md
-│  ├─ V1_SPEC.md
-│  └─ TASK_BREAKDOWN.md
+│  ├─ TASK_BREAKDOWN.md
+│  └─ archive/
 ├─ scripts/
 │  └─ smoke_check_userscript.js
 ├─ README.md

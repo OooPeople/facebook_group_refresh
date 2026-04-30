@@ -65,6 +65,7 @@ function createFakeElement(context, options = {}) {
     matches = () => false,
     querySelector = () => null,
     querySelectorAll = () => [],
+    click = null,
     rect = { width: 100, height: 20, top: 0, bottom: 20 },
   } = options;
   const element = new context.HTMLElement();
@@ -78,6 +79,9 @@ function createFakeElement(context, options = {}) {
   element.querySelector = querySelector;
   element.querySelectorAll = querySelectorAll;
   element.contains = contains || ((node) => node === element);
+  if (click) {
+    element.click = click;
+  }
   element.getBoundingClientRect = () => rect;
   element.getAttribute = (name) => {
     if (name === "href" && href) {
@@ -107,6 +111,7 @@ function createFakeAnchor(context, options = {}) {
     matches = () => false,
     querySelector = () => null,
     querySelectorAll = () => [],
+    click = null,
     rect = { width: 100, height: 20, top: 0, bottom: 20 },
   } = options;
   const anchor = new context.HTMLAnchorElement();
@@ -121,6 +126,9 @@ function createFakeAnchor(context, options = {}) {
   anchor.querySelector = querySelector;
   anchor.querySelectorAll = querySelectorAll;
   anchor.contains = contains || ((node) => node === anchor);
+  if (click) {
+    anchor.click = click;
+  }
   anchor.getBoundingClientRect = () => rect;
   anchor.getAttribute = (name) => {
     if (name === "href") {
@@ -516,13 +524,107 @@ function runScanTargetTests(hooks, context) {
       "Comment sort detection should read the visible sort button label."
     );
     assertEqual(
+      hooks.getCurrentCommentSortControl().control,
+      sortButton,
+      "Comment sort control detection should return the visible control element."
+    );
+    assertEqual(
       hooks.getCurrentScanSortLabel(),
       "由新到舊",
       "Scan sort detection should route comment targets to comment sort detection."
     );
+    assertEqual(
+      hooks.getPreferredSortLabelForScanTarget(hooks.getCurrentScanTarget()),
+      "由新到舊",
+      "Comment targets should prefer the newest-first comment sort label."
+    );
 
     setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/`);
     context.document.querySelectorAll = () => [];
+  });
+
+  runTest("feed sort detection", () => {
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/`);
+
+    const sortButton = createFakeElement(context, {
+      innerText: "社團動態消息排序方式 最相關",
+    });
+    context.document.querySelectorAll = (selector) => {
+      if (selector.includes('[role="button"]')) return [sortButton];
+      return [];
+    };
+
+    assertEqual(
+      hooks.findFeedSortLabelFromButtonText("社團動態消息排序方式 最相關"),
+      "最相關",
+      "Feed sort button text should resolve known feed sort labels."
+    );
+    assertEqual(
+      hooks.getCurrentFeedSortLabel(),
+      "最相關",
+      "Feed sort detection should read the visible feed sort button label."
+    );
+    assertEqual(
+      hooks.getCurrentFeedSortControl().control,
+      sortButton,
+      "Feed sort control detection should return the visible control element."
+    );
+    assertEqual(
+      hooks.getPreferredSortLabelForScanTarget(hooks.getCurrentScanTarget()),
+      "新貼文",
+      "Feed targets should prefer the newest-post sort label."
+    );
+
+    context.document.querySelectorAll = () => [];
+  });
+
+  runTest("comment sort menu option detection", () => {
+    setTestLocation(context, TEST_GROUP_POST_URL);
+
+    const optionRow = createFakeElement(context, {
+      innerText: "由新到舊 顯示所有留言，且最新的留言顯示在最上方。",
+    });
+    const optionSpan = createFakeElement(context, {
+      innerText: "由新到舊 顯示所有留言，且最新的留言顯示在最上方。",
+      closestResult: optionRow,
+    });
+
+    context.document.querySelectorAll = (selector) => {
+      if (selector.includes('[role="menuitem"]')) return [optionRow];
+      if (selector.includes('span[dir="auto"]')) return [optionSpan];
+      return [];
+    };
+
+    assert(
+      hooks.isCommentSortMenuOptionForLabel(optionRow, "由新到舊"),
+      "Comment sort menu option descriptions should be selectable when choosing a sort."
+    );
+    assertEqual(
+      hooks.getCommentSortMenuOptionClickTarget(optionSpan),
+      optionRow,
+      "Comment sort menu option spans should resolve to the clickable option row."
+    );
+    assertEqual(
+      hooks.findCommentSortMenuOption("由新到舊"),
+      optionRow,
+      "Comment sort menu option detection should find the newest-first option."
+    );
+
+    const feedOption = createFakeElement(context, {
+      innerText: "新貼文",
+    });
+    context.document.querySelectorAll = (selector) => {
+      if (selector.includes('[role="menuitem"]')) return [feedOption];
+      return [];
+    };
+    assertEqual(
+      hooks.findFeedSortMenuOption("新貼文"),
+      feedOption,
+      "Feed sort menu option detection should find the newest-post option."
+    );
+
+    context.document.querySelectorAll = () => [];
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/`);
   });
 
   runTest("group name detection on post permalink pages", () => {
@@ -644,9 +746,9 @@ function runConfigAndLayoutTests(hooks) {
     );
 
     assertDeepEqual(
-      hooks.buildMonitoringConfigPatch({ paused: 0 }),
-      { paused: false },
-      "Monitoring config builder should normalize the paused flag."
+      hooks.buildMonitoringConfigPatch({ paused: 0, autoAdjustSort: 1 }),
+      { paused: false, autoAdjustSort: true },
+      "Monitoring config builder should normalize monitoring flags."
     );
 
     assertDeepEqual(
@@ -714,7 +816,7 @@ function runConfigAndLayoutTests(hooks) {
       "Dynamic max windows should scale with the requested target count."
     );
     assertEqual(
-      hooks.getDynamicSeenPostLimit(7),
+      hooks.getDynamicSeenItemLimit(7),
       84,
       "Dynamic seen-post limit should reserve space for per-post alias keys."
     );
@@ -802,6 +904,261 @@ function runConfigAndLayoutTests(hooks) {
       true,
       "Facebook page content mutations should still schedule scans."
     );
+
+    const ownUiPostLink = createFakeAnchor(context, {
+      href: `https://www.facebook.com/groups/${TEST_GROUP_ID}/posts/${TEST_POST_ID}`,
+      innerText: "網址: https://www.facebook.com/groups/example",
+      closestResult: panel,
+    });
+    context.document.querySelectorAll = () => [ownUiPostLink];
+    assertDeepEqual(
+      hooks.collectPostContainers(10),
+      [],
+      "Feed post collection should ignore links rendered inside userscript UI."
+    );
+
+    const ownUiCommentLink = createFakeAnchor(context, {
+      href: `https://www.facebook.com/groups/${TEST_GROUP_ID}/posts/${TEST_POST_ID}/?comment_id=${TEST_COMMENT_ID}`,
+      innerText: "開啟項目",
+      closestResult: panel,
+    });
+    context.document.querySelectorAll = () => [ownUiCommentLink];
+    assertDeepEqual(
+      hooks.collectCommentContainers(10),
+      [],
+      "Comment collection should ignore comment permalinks rendered inside userscript UI."
+    );
+
+    context.document.querySelectorAll = () => [];
+  });
+
+  runTest("feed post collection ignores chat-window group links", () => {
+    const { hooks, context } = loadTestHooks();
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/`);
+
+    const mainRoot = createFakeElement(context, {
+      querySelectorAll: () => [],
+    });
+    const chatLink = createFakeAnchor(context, {
+      href: `https://www.facebook.com/groups/${OTHER_GROUP_ID}/permalink/${TEST_POST_ID}`,
+      innerText: `網址: https://www.facebook.com/groups/${OTHER_GROUP_ID}/permalink/${TEST_POST_ID}`,
+      matches: (selector) => selector === PERMALINK_ANCHOR_SELECTOR,
+    });
+    context.document.querySelectorAll = (selector) => {
+      if (selector === '[role="main"]') return [mainRoot];
+      if (selector === PERMALINK_ANCHOR_SELECTOR) return [chatLink];
+      return [];
+    };
+
+    assertDeepEqual(
+      hooks.collectPostSearchRoots(),
+      [mainRoot],
+      "Feed post collection should choose the main/feed surface as its search root."
+    );
+    assertDeepEqual(
+      hooks.collectPostContainers(10),
+      [],
+      "Group links outside the main/feed surface should not become feed post candidates."
+    );
+
+    mainRoot.querySelectorAll = (selector) => {
+      if (selector === PERMALINK_ANCHOR_SELECTOR) return [chatLink];
+      return [];
+    };
+    assertEqual(
+      hooks.isCrossGroupPostPermalinkCandidate(chatLink),
+      true,
+      "Permalink anchors for another group should be identified before post promotion."
+    );
+    assertDeepEqual(
+      hooks.collectPostContainers(10),
+      [],
+      "Cross-group permalink anchors inside the scan surface should not become feed post candidates."
+    );
+
+    const currentGroupLink = createFakeAnchor(context, {
+      href: `https://www.facebook.com/groups/${TEST_GROUP_ID}/permalink/${TEST_POST_ID}`,
+      matches: (selector) => selector === PERMALINK_ANCHOR_SELECTOR,
+    });
+    assertEqual(
+      hooks.isCrossGroupPostPermalinkCandidate(currentGroupLink),
+      false,
+      "Permalink anchors for the current group should remain eligible for normal post parsing."
+    );
+
+    context.document.querySelectorAll = () => [];
+  });
+
+  runTest("observer root and mutation rescan are target-aware", () => {
+    const { hooks, context } = loadTestHooks();
+    const feedRoot = createFakeElement(context);
+    const mainRoot = createFakeElement(context);
+    const pageNode = createFakeElement(context);
+    const commentAnchorNode = createFakeElement(context, {
+      querySelector: (selector) => {
+        if (selector === 'a[href*="comment_id="], a[href*="reply_comment_id="]') {
+          return createFakeAnchor(context, {
+            href: `https://www.facebook.com/groups/${TEST_GROUP_ID}/posts/${TEST_POST_ID}/?comment_id=${TEST_COMMENT_ID}`,
+          });
+        }
+        return null;
+      },
+    });
+    const commentTextNode = createFakeElement(context, {
+      innerText: "new comment body",
+      matches: (selector) => selector.includes('div[dir="auto"]'),
+    });
+    const existingCommentAnchor = createFakeAnchor(context, {
+      href: `https://www.facebook.com/groups/${TEST_GROUP_ID}/posts/${TEST_POST_ID}/?comment_id=${TEST_COMMENT_ID}`,
+      matches: (selector) => selector === 'a[href*="comment_id="], a[href*="reply_comment_id="]',
+    });
+
+    context.document.body = createFakeElement(context);
+    context.document.querySelector = (selector) => {
+      if (selector === '[role="feed"]') return feedRoot;
+      if (selector === '[role="main"]') return mainRoot;
+      return null;
+    };
+    context.document.querySelectorAll = () => [];
+
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/`);
+    assertEqual(
+      hooks.findObserverRoot(hooks.getCurrentScanTarget()),
+      feedRoot,
+      "Feed targets should use the feed observer root when available."
+    );
+
+    setTestLocation(context, TEST_GROUP_POST_URL);
+    assertEqual(
+      hooks.findObserverRoot(hooks.getCurrentScanTarget()),
+      mainRoot,
+      "Comment targets should prefer the main/comment observer root."
+    );
+    assertEqual(
+      hooks.shouldRescanForMutation(
+        hooks.getCurrentScanTarget(),
+        [{ target: mainRoot, addedNodes: [pageNode] }]
+      ),
+      false,
+      "Comment targets should ignore mutations without comment permalink signals."
+    );
+    assertEqual(
+      hooks.shouldRescanForMutation(
+        hooks.getCurrentScanTarget(),
+        [{ target: mainRoot, addedNodes: [commentAnchorNode] }]
+      ),
+      true,
+      "Comment targets should rescan when a new comment permalink node appears."
+    );
+    assertEqual(
+      hooks.shouldRescanForMutation(
+        hooks.getCurrentScanTarget(),
+        [{ target: mainRoot, addedNodes: [commentTextNode] }]
+      ),
+      true,
+      "Comment targets should rescan when a likely comment text node appears."
+    );
+    assertEqual(
+      hooks.shouldRescanForMutation(
+        hooks.getCurrentScanTarget(),
+        [{ type: "attributes", target: existingCommentAnchor, addedNodes: [] }]
+      ),
+      true,
+      "Comment targets should rescan when an existing comment permalink anchor changes."
+    );
+    assertEqual(
+      hooks.shouldRescanForMutation(
+        hooks.getCurrentScanTarget(),
+        [{ type: "characterData", target: { parentElement: commentTextNode }, addedNodes: [] }]
+      ),
+      true,
+      "Comment targets should rescan when existing comment text changes."
+    );
+    hooks.setMutationSuppressionState(Date.now() + 1000, "test");
+    assertEqual(
+      hooks.shouldRescanForMutation(
+        hooks.getCurrentScanTarget(),
+        [{ target: mainRoot, addedNodes: [commentAnchorNode] }]
+      ),
+      false,
+      "Mutation suppression should prevent self-triggered comment rescans."
+    );
+    hooks.setMutationSuppressionState(0, "");
+    assertEqual(
+      hooks.shouldRescanForMutation(
+        { supported: false, kind: "comments" },
+        [{ target: mainRoot, addedNodes: [pageNode] }]
+      ),
+      false,
+      "Unsupported targets should not rescan for mutations."
+    );
+
+    setTestLocation(context, `https://www.facebook.com/groups/${TEST_GROUP_ID}/`);
+    context.document.querySelector = () => null;
+    context.document.querySelectorAll = () => [];
+  });
+
+  runTest("scan state exposes sort adjustment and collection strategy", () => {
+    const { hooks, context } = loadTestHooks();
+    setTestLocation(context, TEST_GROUP_POST_URL);
+
+    const normalizedSort = hooks.normalizeSortAdjustResult({
+      attempted: true,
+      changed: true,
+      preferredLabel: "由新到舊",
+      beforeLabel: "最相關",
+      afterLabel: "由新到舊",
+      reason: "updated_to_preferred_sort",
+    });
+    assertDeepEqual(
+      normalizedSort,
+      {
+        attempted: true,
+        changed: true,
+        preferredLabel: "由新到舊",
+        beforeLabel: "最相關",
+        afterLabel: "由新到舊",
+        reason: "updated_to_preferred_sort",
+      },
+      "Sort adjustment results should normalize into the latestScan shape."
+    );
+    assertEqual(
+      hooks.getCollectionStrategyForScanTarget({ supported: true, kind: "comments" }, { autoLoadMorePosts: true }),
+      "comment_windows",
+      "Comment targets should report multi-window collection when auto-load is enabled."
+    );
+    assertEqual(
+      hooks.getCollectionStrategyForScanTarget({ supported: true, kind: "comments" }, { autoLoadMorePosts: false }),
+      "comment_loaded_dom_only",
+      "Comment targets should report loaded-DOM-only collection when auto-load is disabled."
+    );
+    assertEqual(
+      hooks.isScrollCollectionEnabledForScanTarget({ supported: true, kind: "comments" }, { autoLoadMorePosts: true }),
+      true,
+      "Supported comment targets should allow scroll collection when auto-load is enabled."
+    );
+
+    const latestScan = hooks.buildLatestScanState({
+      reason: "manual-start",
+      supported: true,
+      groupId: TEST_GROUP_ID,
+      targetKind: "comments",
+      scopeId: `${TEST_GROUP_ID}:post:${TEST_POST_ID}:comments`,
+      parentPostId: TEST_POST_ID,
+      collectedResult: { posts: [], meta: { targetCount: 5 } },
+      uniqueItems: [],
+      matchesToNotify: [],
+      baselineMode: false,
+      sortAdjustResult: normalizedSort,
+      scanTarget: { supported: true, kind: "comments" },
+    });
+
+    assertEqual(latestScan.sortAdjustAttempted, true, "latestScan should expose sort adjustment attempts.");
+    assertEqual(latestScan.sortAdjustChanged, true, "latestScan should expose confirmed sort changes.");
+    assertEqual(latestScan.sortBeforeLabel, "最相關", "latestScan should include the previous sort label.");
+    assertEqual(latestScan.sortAfterLabel, "由新到舊", "latestScan should include the resulting sort label.");
+    assertEqual(latestScan.collectionStrategy, "comment_windows", "latestScan should include collection strategy.");
+    assertEqual(latestScan.scrollCollectionEnabled, true, "latestScan should include scroll collection capability.");
   });
 
   runTest("keyword matching", () => {
@@ -874,6 +1231,7 @@ function clearConfigStorage(context) {
     "fb_group_refresh_ntfy_topic",
     "fb_group_refresh_discord_webhook",
     "fb_group_refresh_auto_load_more_posts",
+    "fb_group_refresh_auto_adjust_sort",
     "fb_group_refresh_refresh_range",
     "fb_group_refresh_group_configs",
   ].forEach((key) => context.GM_deleteValue(key));
@@ -899,6 +1257,7 @@ function runGroupScopedConfigTests(hooks, context) {
         excludeKeywords: "sold",
         ntfyTopic: "topic-a",
         paused: false,
+        autoAdjustSort: false,
         autoLoadMorePosts: false,
         minRefreshSec: 12,
         maxRefreshSec: 18,
@@ -914,6 +1273,7 @@ function runGroupScopedConfigTests(hooks, context) {
         excludeKeywords: "taken",
         ntfyTopic: "topic-b",
         paused: true,
+        autoAdjustSort: true,
         autoLoadMorePosts: true,
         minRefreshSec: 30,
         maxRefreshSec: 40,
@@ -930,6 +1290,7 @@ function runGroupScopedConfigTests(hooks, context) {
     assertEqual(firstGroupConfig.excludeKeywords, "sold", "First group should load its own exclude keywords.");
     assertEqual(firstGroupConfig.ntfyTopic, "topic-a", "First group should load its own ntfy topic.");
     assertEqual(firstGroupConfig.paused, false, "First group should load its own paused flag.");
+    assertEqual(firstGroupConfig.autoAdjustSort, false, "First group should load its own sort-adjust setting.");
     assertEqual(firstGroupConfig.autoLoadMorePosts, false, "First group should load its own load-more setting.");
     assertEqual(firstGroupConfig.minRefreshSec, 12, "First group should load its own min refresh.");
     assertEqual(firstGroupConfig.maxRefreshSec, 18, "First group should load its own max refresh.");
@@ -939,6 +1300,7 @@ function runGroupScopedConfigTests(hooks, context) {
     assertEqual(secondGroupConfig.excludeKeywords, "taken", "Second group should not reuse the first group's exclude keywords.");
     assertEqual(secondGroupConfig.ntfyTopic, "topic-b", "Second group should load its own ntfy topic.");
     assertEqual(secondGroupConfig.paused, true, "Second group should load its own paused flag.");
+    assertEqual(secondGroupConfig.autoAdjustSort, true, "Second group should load its own sort-adjust setting.");
     assertEqual(secondGroupConfig.autoLoadMorePosts, true, "Second group should load its own load-more setting.");
     assertEqual(secondGroupConfig.minRefreshSec, 30, "Second group should load its own min refresh.");
     assertEqual(secondGroupConfig.maxRefreshSec, 40, "Second group should load its own max refresh.");
@@ -1537,6 +1899,37 @@ function runCommentExtractionTests(hooks, context) {
       "https://example.test/?comment_id=1|3:abc|10",
       "Comment candidate signatures should include identity, text fingerprint, and position."
     );
+    const accumulatedComments = [];
+    const accumulatedKeys = new Set();
+    const addedCommentCount = hooks.mergeCommentWindowItemsIntoAccumulated(
+      accumulatedComments,
+      accumulatedKeys,
+      [
+        { itemKind: "comment", commentId: "100000001" },
+        { itemKind: "comment", commentId: "100000001" },
+        { itemKind: "comment", commentId: "100000002" },
+      ],
+      10
+    );
+    assertEqual(
+      addedCommentCount,
+      2,
+      "Comment window accumulation should ignore duplicate comment ids."
+    );
+    assertEqual(
+      accumulatedComments.length,
+      2,
+      "Comment window accumulation should keep only unique comments."
+    );
+    assertEqual(
+      hooks.getCommentWindowCollectionStopReason(10, 10, { meta: {} }, 0),
+      "已達目標項目數",
+      "Comment window scanning should stop when the target count is reached."
+    );
+    assert(
+      hooks.getCommentWindowCollectionStopReason(2, 10, { meta: {} }, 3).includes("3"),
+      "Comment window scanning should stop after the stagnant-window threshold."
+    );
   });
 }
 
@@ -1659,14 +2052,14 @@ function runIdentityAndStoreTests(hooks, context) {
       "Canonical posts should expose id, permalink, composite, fallback, and legacy aliases."
     );
 
-    const snapshot = hooks.buildLatestTopPostSnapshot(canonicalPost);
+    const snapshot = hooks.buildLatestFeedTopPostSnapshot(canonicalPost);
     assertDeepEqual(
-      hooks.getLatestTopPostSnapshotKeys(snapshot),
+      hooks.getLatestFeedTopPostSnapshotKeys(snapshot),
       hooks.getPostKeyAliases(canonicalPost),
       "Stored top-post snapshot keys should preserve all aliases."
     );
     assertEqual(
-      hooks.matchesLatestTopPostSnapshot(snapshot, fallbackOnlyPost),
+      hooks.matchesLatestFeedTopPostSnapshot(snapshot, fallbackOnlyPost),
       true,
       "Top-post snapshot matching should survive missing permalink/postId in later scans."
     );
@@ -1720,6 +2113,18 @@ function runIdentityAndStoreTests(hooks, context) {
       `id:${TEST_COMMENT_ID}`,
       "Normal posts should keep the existing post id key behavior."
     );
+
+    const snapshot = hooks.buildLatestTopItemSnapshot(comment);
+    assertEqual(
+      snapshot.itemKind,
+      "comment",
+      "Generic top-item snapshots should preserve comment item kind."
+    );
+    assertEqual(
+      hooks.matchesLatestTopItemSnapshot(snapshot, fallbackOnlyComment),
+      true,
+      "Generic top-item snapshot matching should work for comment fallback aliases."
+    );
   });
 
   runTest("seen-post aliases survive missing permalink in later scans", () => {
@@ -1735,11 +2140,11 @@ function runIdentityAndStoreTests(hooks, context) {
       text: "Alpha ticket available",
     };
 
-    hooks.clearSeenPostsForGroup(groupId);
-    hooks.markPostSeen(groupId, canonicalPost);
+    hooks.clearSeenItemsForScope(groupId);
+    hooks.markItemSeen(groupId, canonicalPost);
 
     assertEqual(
-      hooks.hasSeenPost(groupId, fallbackOnlyPost),
+      hooks.hasSeenItem(groupId, fallbackOnlyPost),
       true,
       "Seen-post lookup should still match when a later extraction only has fallback identity."
     );
@@ -1765,39 +2170,39 @@ function runIdentityAndStoreTests(hooks, context) {
       text: "Alpha ticket available",
     };
 
-    hooks.markPostSeen(firstCommentScope, comment);
-    hooks.markPostSeen(postScope, post);
+    hooks.markItemSeen(firstCommentScope, comment);
+    hooks.markItemSeen(postScope, post);
 
     assertEqual(
-      hooks.hasSeenPost(firstCommentScope, comment),
+      hooks.hasSeenItem(firstCommentScope, comment),
       true,
       "Comment scope should contain its own comment seen record."
     );
     assertEqual(
-      hooks.hasSeenPost(postScope, comment),
+      hooks.hasSeenItem(postScope, comment),
       false,
       "Group feed scope should not inherit comment seen records."
     );
     assertEqual(
-      hooks.hasSeenPost(secondCommentScope, comment),
+      hooks.hasSeenItem(secondCommentScope, comment),
       false,
       "Another post's comment scope should not inherit this comment seen record."
     );
     assertEqual(
-      hooks.hasSeenPost(postScope, post),
+      hooks.hasSeenItem(postScope, post),
       true,
       "Group feed scope should retain normal post seen records."
     );
 
-    hooks.clearSeenPostsForGroup(firstCommentScope);
+    hooks.clearSeenItemsForScope(firstCommentScope);
 
     assertEqual(
-      hooks.hasSeenPost(firstCommentScope, comment),
+      hooks.hasSeenItem(firstCommentScope, comment),
       false,
       "Clearing one comment scope should remove that scope's seen state."
     );
     assertEqual(
-      hooks.hasSeenPost(postScope, post),
+      hooks.hasSeenItem(postScope, post),
       true,
       "Clearing one comment scope should not remove group feed seen state."
     );
@@ -1811,7 +2216,7 @@ function runIdentityAndStoreTests(hooks, context) {
     );
     assertEqual(
       hooks.getWindowCollectionStopReason(10, 10, { meta: {} }, 0),
-      "已達目標貼文數",
+      "已達目標項目數",
       "Target count should still win as the normal stop reason."
     );
   });
@@ -1831,8 +2236,8 @@ function runIdentityAndStoreTests(hooks, context) {
       text: "Beta ticket available",
     };
 
-    hooks.markPostSeen(TEST_GROUP_ID, firstGroupPost);
-    hooks.markPostSeen(OTHER_GROUP_ID, secondGroupPost);
+    hooks.markItemSeen(TEST_GROUP_ID, firstGroupPost);
+    hooks.markItemSeen(OTHER_GROUP_ID, secondGroupPost);
 
     assert(
       typeof context.GM_getValue(buildPerGroupStorageKey("seenPosts", TEST_GROUP_ID), null) === "string",
@@ -1849,30 +2254,30 @@ function runIdentityAndStoreTests(hooks, context) {
     );
 
     assertEqual(
-      hooks.hasSeenPost(TEST_GROUP_ID, firstGroupPost),
+      hooks.hasSeenItem(TEST_GROUP_ID, firstGroupPost),
       true,
       "First group should retain its own seen record."
     );
     assertEqual(
-      hooks.hasSeenPost(OTHER_GROUP_ID, secondGroupPost),
+      hooks.hasSeenItem(OTHER_GROUP_ID, secondGroupPost),
       true,
       "Second group should retain its own seen record."
     );
     assertEqual(
-      hooks.hasSeenPost(TEST_GROUP_ID, secondGroupPost),
+      hooks.hasSeenItem(TEST_GROUP_ID, secondGroupPost),
       false,
       "Seen-post lookup should stay isolated by group."
     );
 
-    hooks.clearSeenPostsForGroup(TEST_GROUP_ID);
+    hooks.clearSeenItemsForScope(TEST_GROUP_ID);
 
     assertEqual(
-      hooks.hasSeenPost(TEST_GROUP_ID, firstGroupPost),
+      hooks.hasSeenItem(TEST_GROUP_ID, firstGroupPost),
       false,
       "Clearing one group should remove that group's seen state."
     );
     assertEqual(
-      hooks.hasSeenPost(OTHER_GROUP_ID, secondGroupPost),
+      hooks.hasSeenItem(OTHER_GROUP_ID, secondGroupPost),
       true,
       "Clearing one group should not remove other groups' seen state."
     );
@@ -1894,7 +2299,7 @@ function runIdentityAndStoreTests(hooks, context) {
       })
     );
 
-    const migratedStore = hooks.getSeenPostGroupStore(TEST_GROUP_ID);
+    const migratedStore = hooks.getSeenItemScopeStore(TEST_GROUP_ID);
 
     assertDeepEqual(
       migratedStore,
@@ -1910,7 +2315,7 @@ function runIdentityAndStoreTests(hooks, context) {
     );
   });
 
-  runTest("top-post and latest-scan caches stay isolated per group", () => {
+  runTest("top-item and latest-scan caches stay isolated per group and comment scope", () => {
     clearGroupStateStorage(context);
     const firstTopPost = {
       postId: "9876543210123456",
@@ -1926,11 +2331,29 @@ function runIdentityAndStoreTests(hooks, context) {
     };
     const firstScanPosts = [firstTopPost, { author: "A2", text: "Alpha follow-up" }];
     const secondScanPosts = [secondTopPost, { author: "B2", text: "Beta follow-up" }];
+    const commentScope = `${TEST_GROUP_ID}:post:${TEST_POST_ID}:comments`;
+    const topComment = {
+      itemKind: "comment",
+      commentId: TEST_COMMENT_ID,
+      parentPostId: TEST_POST_ID,
+      permalink: `${TEST_GROUP_POST_URL}/?comment_id=${TEST_COMMENT_ID}`,
+      author: "Carol",
+      text: "Alpha ticket in comment",
+    };
+    const commentScanItems = [topComment, {
+      itemKind: "comment",
+      commentId: "2223334445556667",
+      parentPostId: TEST_POST_ID,
+      author: "Dana",
+      text: "Alpha follow-up comment",
+    }];
 
-    hooks.setLatestTopPostForGroup(TEST_GROUP_ID, firstTopPost);
-    hooks.setLatestTopPostForGroup(OTHER_GROUP_ID, secondTopPost);
-    hooks.setLatestScanPostsForGroup(TEST_GROUP_ID, firstScanPosts);
-    hooks.setLatestScanPostsForGroup(OTHER_GROUP_ID, secondScanPosts);
+    hooks.setLatestFeedTopPostForGroup(TEST_GROUP_ID, firstTopPost);
+    hooks.setLatestFeedTopPostForGroup(OTHER_GROUP_ID, secondTopPost);
+    hooks.setLatestFeedScanPostsForGroup(TEST_GROUP_ID, firstScanPosts);
+    hooks.setLatestFeedScanPostsForGroup(OTHER_GROUP_ID, secondScanPosts);
+    hooks.setLatestCommentTopItemForScope(commentScope, topComment);
+    hooks.setLatestCommentScanItemsForScope(commentScope, commentScanItems);
 
     assert(
       typeof context.GM_getValue(buildPerGroupStorageKey("latestTopPosts", TEST_GROUP_ID), null) === "string",
@@ -1939,6 +2362,10 @@ function runIdentityAndStoreTests(hooks, context) {
     assert(
       typeof context.GM_getValue(buildPerGroupStorageKey("latestScanPosts", OTHER_GROUP_ID), null) === "string",
       "Latest-scan caches should persist to dedicated per-group keys."
+    );
+    assert(
+      typeof context.GM_getValue(buildPerGroupStorageKey("latestTopPosts", commentScope), null) === "string",
+      "Latest comment top-item snapshots should persist to dedicated per-scope keys."
     );
     assertEqual(
       context.GM_getValue("fb_group_refresh_latest_top_posts", null),
@@ -1952,24 +2379,39 @@ function runIdentityAndStoreTests(hooks, context) {
     );
 
     assertEqual(
-      hooks.getLatestTopPostForGroup(TEST_GROUP_ID).author,
+      hooks.getLatestFeedTopPostForGroup(TEST_GROUP_ID).author,
       "Alice",
       "First group should keep its own latest top-post snapshot."
     );
     assertEqual(
-      hooks.getLatestTopPostForGroup(OTHER_GROUP_ID).author,
+      hooks.getLatestFeedTopPostForGroup(OTHER_GROUP_ID).author,
       "Bob",
       "Second group should keep its own latest top-post snapshot."
     );
     assertEqual(
-      hooks.getLatestScanPostsForGroup(TEST_GROUP_ID)[0].author,
+      hooks.getLatestFeedScanPostsForGroup(TEST_GROUP_ID)[0].author,
       "Alice",
       "First group should keep its own latest-scan cache."
     );
     assertEqual(
-      hooks.getLatestScanPostsForGroup(OTHER_GROUP_ID)[0].author,
+      hooks.getLatestFeedScanPostsForGroup(OTHER_GROUP_ID)[0].author,
       "Bob",
       "Second group should keep its own latest-scan cache."
+    );
+    assertEqual(
+      hooks.getLatestCommentTopItemForScope(commentScope).commentId,
+      TEST_COMMENT_ID,
+      "Comment scope should keep its own latest top-item snapshot."
+    );
+    assertEqual(
+      hooks.getLatestCommentScanItemsForScope(commentScope)[0].author,
+      "Carol",
+      "Comment scope should keep its own latest-scan cache."
+    );
+    assertEqual(
+      hooks.getLatestFeedTopPostForGroup(TEST_GROUP_ID).itemKind,
+      "post",
+      "Group feed top-post snapshot should not be replaced by comment scope cache."
     );
   });
 
@@ -2004,12 +2446,12 @@ function runIdentityAndStoreTests(hooks, context) {
     );
 
     assertEqual(
-      hooks.getLatestTopPostForGroup(TEST_GROUP_ID).author,
+      hooks.getLatestFeedTopPostForGroup(TEST_GROUP_ID).author,
       "Alice",
       "Legacy shared top-post snapshots should still load for the requested group."
     );
     assertEqual(
-      hooks.getLatestScanPostsForGroup(TEST_GROUP_ID)[0].author,
+      hooks.getLatestFeedScanPostsForGroup(TEST_GROUP_ID)[0].author,
       "Alice",
       "Legacy shared latest-scan caches should still load for the requested group."
     );
@@ -2027,7 +2469,7 @@ function runIdentityAndStoreTests(hooks, context) {
 
   runTest("seen-post alias capacity avoids trimming active posts too aggressively", () => {
     const targetCount = 8;
-    const dynamicSeenLimit = hooks.getDynamicSeenPostLimit(targetCount);
+    const dynamicSeenLimit = hooks.getDynamicSeenItemLimit(targetCount);
     const groupStore = {};
 
     for (let index = 0; index < targetCount; index += 1) {
@@ -2043,7 +2485,7 @@ function runIdentityAndStoreTests(hooks, context) {
       }
     }
 
-    const trimmedSeenStore = hooks.trimSeenPostGroupStore(groupStore, dynamicSeenLimit);
+    const trimmedSeenStore = hooks.trimSeenItemScopeStore(groupStore, dynamicSeenLimit);
     const retainedPost = {
       author: "Author 0",
       text: "Alpha ticket 0",
@@ -2101,7 +2543,7 @@ function runIdentityAndStoreTests(hooks, context) {
   });
 
   runTest("seen/history store shaping", () => {
-    const trimmedSeenStore = hooks.trimSeenPostGroupStore(
+    const trimmedSeenStore = hooks.trimSeenItemScopeStore(
       {
         old: "2026-04-08T09:00:00.000Z",
         newest: "2026-04-08T11:00:00.000Z",
@@ -2149,6 +2591,27 @@ function runIdentityAndStoreTests(hooks, context) {
       1,
       "Duplicate history keys should be replaced."
     );
+
+    const incomingHistory = hooks.buildIncomingMatchHistoryEntries("g1", "Group", {
+      itemKind: "comment",
+      parentPostId: TEST_POST_ID,
+      commentId: TEST_COMMENT_ID,
+      postKey: `comment:${TEST_COMMENT_ID}`,
+      author: "Alice",
+      text: "alpha",
+      permalink: "https://example.test/comment",
+      includeRule: "alpha",
+    });
+    assertEqual(
+      incomingHistory.entries[0].itemKind,
+      "comment",
+      "Incoming history entries should preserve the scan item kind."
+    );
+    assertEqual(
+      incomingHistory.entries[0].commentId,
+      TEST_COMMENT_ID,
+      "Incoming history entries should preserve comment ids."
+    );
   });
 }
 
@@ -2165,6 +2628,8 @@ function runPresentationTests(hooks) {
       notificationFields,
       {
         groupName: "Test Group",
+        itemKind: "post",
+        itemKindLabel: "貼文",
         author: "Alice",
         includeRule: "alpha beta",
         text: "Alpha beta ticket available right now.",
@@ -2177,6 +2642,7 @@ function runPresentationTests(hooks) {
       hooks.buildCompactNotificationSegments(notificationFields),
       [
         "Test Group",
+        "貼文",
         "Alice",
         "match: alpha beta",
         "Alpha beta ticket available right now.",
@@ -2201,6 +2667,7 @@ function runPresentationTests(hooks) {
       hooks.buildRemoteNotificationLines(notificationFields),
       [
         "社團: Test Group",
+        "類型: 貼文",
         "作者: Alice",
         "關鍵字: alpha beta",
         "內容: Alpha beta ticket available right now.",
@@ -2217,9 +2684,38 @@ function runPresentationTests(hooks) {
     });
     assert(
       remoteBody.includes("社團: Test Group") &&
+        remoteBody.includes("類型: 貼文") &&
         remoteBody.includes("作者: Alice") &&
         remoteBody.includes("連結: https://example.com/post/1"),
       "Remote notification body should include group, author, and permalink lines."
+    );
+
+    const commentNotificationFields = hooks.getNotificationFields({
+      itemKind: "comment",
+      author: "Bob",
+      includeRule: "alpha",
+      text: "alpha comment",
+      permalink: "https://example.com/comment/1",
+    });
+    assertEqual(
+      commentNotificationFields.itemKindLabel,
+      "留言",
+      "Comment notification fields should expose a readable item kind."
+    );
+    assert(
+      hooks.buildRemoteNotificationBody({
+        itemKind: "comment",
+        author: "Bob",
+        includeRule: "alpha",
+        text: "alpha comment",
+        permalink: "https://example.com/comment/1",
+      }).includes("類型: 留言"),
+      "Comment remote notifications should include the comment type."
+    );
+    assertEqual(
+      hooks.buildNotificationPayload({ itemKind: "comment", text: "alpha comment" }).title,
+      "Facebook group comment match",
+      "Comment notification payloads should use the comment-specific title."
     );
   });
 
@@ -2239,6 +2735,122 @@ function runPresentationTests(hooks) {
       fieldRow.includes("連結") && fieldRow.includes('href="https://example.com"'),
       "History field row should keep the label and render the provided value HTML."
     );
+
+    const commentHistoryHtml = hooks.renderHistoryEntryHtml(
+      {
+        groupName: "Test Group",
+        itemKind: "comment",
+        parentPostId: TEST_POST_ID,
+        commentId: TEST_COMMENT_ID,
+        author: "Alice",
+        includeRule: "alpha",
+        text: "alpha ticket",
+        permalink: "https://example.test/comment",
+        notifiedAt: "2026-04-08T10:00:00.000Z",
+      },
+      0
+    );
+    assert(
+      commentHistoryHtml.includes("留言") &&
+        !commentHistoryHtml.includes(TEST_COMMENT_ID) &&
+        !commentHistoryHtml.includes(TEST_POST_ID) &&
+        commentHistoryHtml.includes("開啟項目"),
+      "History entries should show the item type and link without internal comment ids."
+    );
+
+    const commentDebugItemRow = hooks.buildPanelDebugScanItemViewState(
+      {
+        itemKind: "comment",
+        commentId: TEST_COMMENT_ID,
+        parentPostId: TEST_POST_ID,
+        source: "comment_permalink_anchor",
+        permalink: "https://example.test/comment",
+        permalinkSource: "comment_anchor",
+        canonicalPermalinkCandidateCount: 1,
+        author: "Alice",
+        containerRole: "comment_container",
+        textSource: "comment",
+        includeRule: "alpha",
+        excludeRule: "",
+        eligible: true,
+        seen: false,
+        text: "alpha ticket",
+      },
+      0
+    );
+    const commentDebugViewState = {
+      currentUrlLabel: TEST_GROUP_POST_URL,
+      groupIdLabel: TEST_GROUP_ID,
+      scanSupportedLabel: "是",
+      targetKindLabel: "comments",
+      configScopeLabel: TEST_GROUP_ID,
+      sortDisplayLabel: "由新到舊",
+      scopeIdLabel: `${TEST_GROUP_ID}:post:${TEST_POST_ID}:comments`,
+      parentPostIdLabel: TEST_POST_ID,
+      pausedLabel: "否",
+      isScanningLabel: "否",
+      isLoadingMoreLabel: "否",
+      scanTimerLabel: "未排程",
+      includeKeywordsLabel: "alpha",
+      excludeKeywordsLabel: "beta",
+      reasonLabel: "manual-start",
+      baselineModeLabel: "否",
+      targetPostCountLabel: "10",
+      loadMoreModeLabel: "off",
+      topPostShortcutLabel: "未啟用",
+      topPostShortcutBypassReasonLabel: "(無)",
+      loadMoreAttemptedLabel: "未執行",
+      maxWindowCountLabel: "1",
+      loadMoreWindowCountLabel: "1",
+      stopReasonLabel: "(無)",
+      topPostKeyLabel: "(無)",
+      previousTopPostKeyLabel: "(無)",
+      loadMoreCountDeltaLabel: "10 -> 10",
+      candidateCountLabel: "10",
+      freshExtractCountLabel: "10",
+      cacheHitCountLabel: "0",
+      parsedCountLabel: "10",
+      accumulatedCountLabel: "10",
+      filteredFeedSortControlCountLabel: "0",
+      filteredNonPostCountLabel: "0",
+      filteredEmptyTextCountLabel: "0",
+      scannedCountLabel: "10",
+      latestNotificationStatusLabel: "(本次無)",
+      latestErrorLabel: "(無)",
+      isCommentTarget: true,
+      isFeedTarget: false,
+      itemRows: {
+        empty: false,
+        entries: [commentDebugItemRow],
+      },
+    };
+    const commentDebugSummaryRows = hooks.buildPanelDebugSummaryRows(commentDebugViewState);
+    const commentDebugLabels = commentDebugSummaryRows.map((row) => row.label);
+    assert(
+        commentDebugLabels.includes("父貼文ID") &&
+        commentDebugLabels.includes("最上方留言快篩") &&
+        commentDebugLabels.includes("快篩略過原因") &&
+        commentDebugLabels.includes("本輪最上方留言 key") &&
+        !commentDebugLabels.includes("最上方快篩") &&
+        !commentDebugLabels.includes("本輪最上方貼文 key"),
+      "Comment debug summary should keep comment fields and show comment-specific shortcut fields."
+    );
+
+    const commentDebugRowHtml = hooks.renderPanelDebugScanItemRowHtml(commentDebugItemRow);
+    assert(
+      commentDebugRowHtml.includes("留言ID") &&
+        !commentDebugRowHtml.includes("<div>貼文ID=") &&
+        !commentDebugRowHtml.includes("warmup嘗試"),
+      "Comment debug item rows should hide post-id and post permalink warmup diagnostics."
+    );
+
+    const commentDebugCopyText = hooks.buildPanelDebugCopyText(commentDebugViewState);
+    assert(
+      commentDebugCopyText.includes(`網址:${TEST_GROUP_POST_URL}`) &&
+        !commentDebugCopyText.includes("網址:\n") &&
+        commentDebugCopyText.includes("連結=https://example.test/comment"),
+      "Debug copy text should keep each field value on the same logical line."
+    );
   });
 }
 
@@ -2247,7 +2859,7 @@ function runRuntimeStateTests(hooks) {
     assertDeepEqual(
       hooks.buildResetScanRuntimeState(),
       {
-        latestPosts: [],
+        latestItems: [],
         latestScan: null,
         latestError: "",
       },

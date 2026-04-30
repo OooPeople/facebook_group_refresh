@@ -4,12 +4,26 @@
 
 本計畫的核心原則是：新增留言掃描能力，但不影響既有社團動態牆貼文監控。實作時應維持單檔 `src/facebook_group_refresh.user.js`，不引入 bundler、背景服務、headless browser、登入自動化或互動式 Facebook 操作。
 
+## 目前狀態
+
+第一版已完成；後續已加入 scroll-only 自動載入更多留言：
+
+- 社團 feed 使用 `posts` scan target。
+- 單篇貼文頁使用 `comments` scan target。
+- config 維持 group-scoped，同社團 posts/comments 共用設定。
+- baseline / seen 維持 target-scoped，不同單篇貼文留言頁各自有 seen baseline。
+- 留言模式可用保守捲動嘗試載入更多留言，但不主動切換留言排序。
+- 留言模式已加入最上方留言快篩；在「由新到舊」且最上方留言未變時，會沿用上一輪掃描快取並跳過深度捲動。
+- seen-stop 仍維持 feed-post only。
+
+本文件保留原分階段計畫與後續驗證清單；若與 `ARCHITECTURE_PLAN.md` 衝突，以目前架構文件為準。
+
 ## 使用者可見行為
 
 第一版完成後，使用者可在兩種頁面使用同一支腳本：
 
 - 社團動態牆頁：維持目前行為，自動 refresh 頁面、保守 scroll、掃描最近貼文。
-- 社團單篇貼文頁：自動 refresh 目前貼文頁、保守 scroll、掃描該貼文下方可見與載入後的留言。
+- 社團單篇貼文頁：自動 refresh 目前貼文頁，掃描該貼文下方留言；若自動載入更多已啟用，會以 scroll-only 方式保守載入更多留言。
 
 建議第一版採用自動偵測：
 
@@ -23,7 +37,7 @@
 - 不自動留言、回覆、按讚、私訊或與 Facebook 使用者互動。
 - 不處理帳號憑證、cookies、tokens、session IDs。
 - 不加入大量爬取、OCR、CAPTCHA、stealth automation。
-- 第一版不強制點擊「查看更多留言」、「查看先前留言」或切換留言排序。
+- 不強制點擊「查看更多留言」、「查看先前留言」或切換留言排序。
 - 第一版不掃描巢狀回覆留言，除非 DOM selector 實作時能安全區分且不增加脆弱互動。
 - 不改變既有社團貼文監控的預設行為、設定語義、通知通道與 seen state。
 
@@ -53,16 +67,16 @@
 - `kind` 決定 collector 與最佳化策略。
 - `groupId` 維持社團設定與通知顯示使用。
 - `parentPostId` 只在留言模式有值。
-- `scopeId` 用於 baseline、seen、latest scan cache，避免留言與社團 feed seen state 混在一起。
+- `scopeId` 用於 baseline、seen，避免留言與社團 feed seen state 混在一起。
 
-建議 scope：
+目前 scope：
 
 ```text
-group:<group-id>:posts
-group:<group-id>:post:<post-id>:comments
+<group-id>
+<group-id>:post:<post-id>:comments
 ```
 
-如果要最小化儲存 helper 改動，可先讓既有 `groupId` 參數接受 scope id；但函式命名要逐步泛化，避免長期誤導。
+posts target 保留既有 group id 作為 scope，以相容舊 seen state；comments target 使用父貼文分區。
 
 ## Scan Item Shape
 
@@ -141,8 +155,8 @@ group:<group-id>:post:<post-id>:comments
 
 既有貼文 collector 應保持行為不變：
 
-- `collectPostsWithTopPostShortcut()`
-- `collectPostsAcrossWindows()`
+- `collectFeedPostsWithTopPostShortcut()`
+- `collectFeedPostsAcrossWindows()`
 - `collectPostContainers()`
 - `extractPostRecord()`
 
@@ -163,14 +177,14 @@ group:<group-id>:post:<post-id>:comments
 - `prepareCommentContainerForExtraction(container)`
 - `extractCommentRecord(candidate, scanTarget)`
 - `collectCommentsFromCandidates(candidates, scanCache)`
-- `collectLoadedCommentsOnly(scanTarget)`
+- `collectCommentsAcrossWindows(scanTarget)`
 
 候選策略：
 
 - 優先從單篇貼文頁主內容區或目前文章容器附近找留言。
 - 使用 `role="article"`、comment permalink、`comment_id` query、`aria-label`、文字錨點等較穩定訊號。
 - 避免把原始貼文本文、社團導覽、排序控制、推薦內容誤當留言。
-- 初版只掃目前已載入 DOM 的留言，不自動滾動、不主動展開大量隱藏留言。等留言抽取與作者辨識穩定後，再評估是否加入 comments 專用的自動載入策略。
+- 正式掃描採 scroll-only 自動載入更多留言；不主動點擊「查看更多留言」或「查看先前留言」。
 
 文字抽取：
 
@@ -217,26 +231,28 @@ permalink / id：
 
 ### Collection
 
-`collectScanPosts(reason, supported, groupId)` 改為依 target 分流：
+`collectScanItems(reason, supported, scanTarget)` 已依 target 分流：
 
 - `target.kind === "posts"`：既有路徑。
 - `target.kind === "comments"`：新留言路徑。
 
-留言模式第一版不使用：
+留言模式目前使用：
 
-- top-post shortcut
+- 最上方留言快篩
+- latest top item cache
+- latest scan cache
+
+留言模式仍不使用：
+
 - seen-stop
-- latest top post cache
-
-可以使用 latest scan cache，但 key 必須用 `scopeId`。如果會增加風險，第一版可不快取留言 latest scan，只保留 panel runtime。
 
 ### Summary / Commit
 
-`summarizeScanPosts()`、`buildPostScanSummary()`、`commitScanState()` 可先維持名稱，但傳入 scope id：
+目前 orchestration 已收斂成 scan item 語意，並傳入 scope id：
 
 ```js
-const seen = hasSeenPost(scanContext.scopeId, item);
-markPostSeen(scanContext.scopeId, item);
+const seen = hasSeenItem(scanContext.scopeId, item);
+markItemSeen(scanContext.scopeId, item);
 addMatchHistory(scanContext.groupId, matchesToNotify);
 ```
 
@@ -246,7 +262,7 @@ history 建議保留 `groupId`，並在 entry 內新增：
 - `parentPostId`
 - `commentId`
 
-UI 可先不全部顯示，但資料要保留，方便後續診斷。
+history entry 已保存並在歷史視窗顯示類型、父貼文 ID 與留言 ID。
 
 ## Notification / UI
 
@@ -261,7 +277,7 @@ UI 可先不全部顯示，但資料要保留，方便後續診斷。
 主面板：
 
 - 狀態列顯示目前模式：`社團貼文` / `貼文留言`
-- target count 文案第一版可維持「目標掃描貼文數」，但功能完成前應改為較中性的「目標掃描項目數」。
+- target count 文案已改為較中性的「目標掃描項目數」。
 - debug rows 加上 `scan target`、`scopeId`、`parentPostId`。
 - debug item rows 加上 `itemKind`、`commentId`。
 
@@ -340,8 +356,8 @@ UI 可先不全部顯示，但資料要保留，方便後續診斷。
 - [x] 新增 comment selectors 與 text extraction helper。
 - [x] 新增 `collectCommentContainers()`。
 - [x] 新增 `extractCommentRecord()`。
-- [x] 新增 `collectLoadedCommentsOnly()`，只掃目前已載入 DOM 的留言。
-- [x] 留言模式先不啟用 top-post shortcut、seen-stop 或自動滾動。
+- [x] 新增 `collectCommentsAcrossWindows()`，支援已載入 DOM 與 scroll-only 自動載入更多留言。
+- [x] 留言模式啟用最上方留言快篩，但不啟用 seen-stop。
 - [x] 留言模式不主動點擊大量 load more / previous comments。
 
 測試：
@@ -367,19 +383,19 @@ UI 可先不全部顯示，但資料要保留，方便後續診斷。
 
 ### Phase 4: Scope-Safe Seen / Baseline
 
-- [ ] 將 commit path 明確使用 `scopeId` 寫 seen。
-- [ ] `restartMonitoringForCurrentGroup()` 改為 reset current scope，或新增 `restartMonitoringForCurrentTarget()`。
-- [ ] 清除 baseline 時只清目前 scope，不清同社團其他貼文留言或社團 feed。
-- [ ] latest scan / latest top post cache 只在 posts target 使用，或改用 scope-safe helper。
+- [x] 將 commit path 明確使用 `scopeId` 寫 seen。
+- [x] `restartMonitoringForCurrentGroup()` 相容入口已委派到 current target reset。
+- [x] 清除 baseline 時只清目前 scope，不清同社團其他貼文留言或社團 feed。
+- [x] latest scan / latest top post cache 只在 posts target 使用，並以 feed-only helper 命名。
 
 測試：
 
-- [ ] smoke test 覆蓋：
+- [x] smoke test 覆蓋：
   - posts scope seen 不影響 comments scope
   - comments scope seen 不影響 posts scope
   - 不同 parent post comments scope 互不影響
   - manual start 只 reset current scope
-- [ ] `node .\scripts\smoke_check_userscript.js`
+- [x] `node .\scripts\smoke_check_userscript.js`
 - [ ] 手動確認：
   - 同一則留言不重複通知
   - 同社團 feed 新貼文仍可通知
@@ -392,15 +408,15 @@ UI 可先不全部顯示，但資料要保留，方便後續診斷。
 
 ### Phase 5: UI / Notification Polish
 
-- [ ] 面板狀態顯示目前掃描模式。
-- [ ] 設定文案從「貼文數」調整為「項目數」或依模式顯示。
-- [ ] debug 顯示 target kind、scope id、parent post id、comment id。
-- [ ] notification title / body 能區分貼文與留言。
-- [ ] history modal 顯示類型，留言連結可開啟。
+- [x] 面板狀態顯示目前掃描模式。
+- [x] 設定文案從「貼文數」調整為「項目數」。
+- [x] debug 顯示 target kind、scope id、parent post id、comment id。
+- [x] notification title / body 能區分貼文與留言。
+- [x] history modal 顯示類型，留言連結可開啟。
 
 測試：
 
-- [ ] smoke test 覆蓋 notification formatter：
+- [x] smoke test 覆蓋 notification formatter：
   - post body 不退化
   - comment body 包含類型或留言資訊
 - [ ] `node .\scripts\smoke_check_userscript.js`
@@ -413,11 +429,11 @@ UI 可先不全部顯示，但資料要保留，方便後續診斷。
 
 ### Phase 6: Documentation and Final Regression
 
-- [ ] 更新 `README.md`。
-- [ ] 更新 `docs/USAGE.md`。
-- [ ] 更新 `docs/ARCHITECTURE_PLAN.md`。
+- [x] 更新 `README.md`。
+- [x] 更新 `docs/USAGE.md`。
+- [x] 更新 `docs/ARCHITECTURE_PLAN.md`。
 - [ ] 如需要交接，更新 `docs/HANDOFF_PLAN.md`。
-- [ ] 執行 `node .\scripts\smoke_check_userscript.js`。
+- [x] 執行 `node .\scripts\smoke_check_userscript.js`。
 - [ ] 完成社團 feed 手動回歸。
 - [ ] 完成單篇貼文留言手動驗證。
 
@@ -466,7 +482,7 @@ UI 可先不全部顯示，但資料要保留，方便後續診斷。
 5. 後續新貼文符合 include 時通知。
 6. exclude 命中時不通知。
 7. 自動 refresh 與保守 scroll 行為維持。
-8. top-post shortcut 與 seen-stop debug 不出現異常。
+8. top-item shortcut 與 seen-stop debug 不出現異常。
 9. 歷史紀錄可開啟貼文連結。
 
 ### 單篇貼文留言

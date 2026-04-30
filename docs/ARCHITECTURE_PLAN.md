@@ -9,9 +9,9 @@
 它的核心目標是：
 
 - 在使用者已登入 Facebook 的瀏覽器頁面中監看單一社團。
-- 從目前社團動態牆抽取少量最近貼文。
+- 從目前社團動態牆抽取少量最近貼文，或從單篇貼文頁抽取留言；留言模式可在自動載入更多啟用時以 scroll-only 方式保守載入更多。
 - 以 include / exclude 關鍵字判斷是否通知。
-- 對貼文做 group-scoped 去重，避免重複提醒。
+- 對 scan target 做 scope-scoped 去重，避免重複提醒。
 - 只透過使用者明確啟用的通知通道送出遠端通知。
 - 維持保守頁面互動，不加入登入、發文、留言、按讚、加入社團、私訊或大量爬取能力。
 
@@ -25,11 +25,11 @@
 - `Config Use Cases`：keyword、refresh、notification、monitoring、UI 設定的 patch / persist 入口。
 - `Text / Common Utils`：文字正規化、HTML escape、數值裁切、panel 位置計算、clipboard 等共用工具。
 - `Matcher / Rules`：include / exclude 規則解析與比對。
-- `Page Context / Scheduling`：社團頁判斷、社團名稱、排序偵測、refresh / scan 排程。
-- `Extractor / DOM Collection`：feed root、候選貼文容器、文字展開、permalink warmup、postId / author / text 抽取。
-- `Post Parsing / Notification Formatting`：貼文 identity fragment、通知欄位與通知文字格式。
-- `Persistence / Dedupe / History`：seen posts、match history、latest top post、latest scan posts。
-- `Scan Engine`：單輪掃描 orchestration、跨視窗收集、top-post shortcut、seen-stop、include / exclude 摘要、commit state。
+- `Page Context / Scheduling`：scan target 判斷、社團名稱、排序偵測、refresh / scan 排程。
+- `Extractor / DOM Collection`：observer root、候選貼文 / 留言容器、文字展開、permalink warmup、id / author / text 抽取。
+- `Post Parsing / Notification Formatting`：scan item identity fragment、通知欄位與通知文字格式。
+- `Persistence / Dedupe / History`：seen items、match history、最上方項目 snapshot、latest scan cache。
+- `Scan Engine`：單輪掃描 orchestration、跨視窗收集、top-item shortcut、seen-stop、include / exclude 摘要、commit state。
 - `Notifier`：GM desktop、ntfy、Discord Webhook 的通知任務分發。
 - `UI / Modal`：主面板、debug、設定視窗、說明視窗、歷史紀錄視窗、拖曳位置。
 - `Lifecycle / Observer`：啟動流程、MutationObserver、Facebook SPA route 監看、panel 補掛。
@@ -53,6 +53,7 @@
 - `jitterEnabled`
 - `fixedRefreshSec`
 - `autoLoadMorePosts`
+- `autoAdjustSort`
 - `matchHistoryGlobalLimit`
 - `enableGmNotification`
 
@@ -62,8 +63,9 @@
 
 - 優先使用 Tampermonkey `GM_getValue` / `GM_setValue` / `GM_deleteValue`。
 - 舊版 `localStorage` 只作為 migration fallback。
-- include / exclude、通知端點、paused、refresh 等設定已改為 per-group bucket。
-- `seenPosts`、`latestTopPosts`、`latestScanPosts` 使用每社團獨立 key。
+- include / exclude、通知端點、paused、refresh 等設定已改為 per-group bucket；同社團的貼文模式與留言模式共用設定。
+- `seenPosts` 使用 scan scope 獨立 key：社團貼文模式使用社團 ID，單篇貼文留言模式使用 `groupId:post:parentPostId:comments`。
+- `latestTopPosts`、`latestScanPosts` 使用獨立 key；社團貼文模式以 group id 為 key，單篇貼文留言模式以 scan scope id 為 key，服務最上方項目 shortcut。
 - `matchHistory` 是全域清單，保留最近 `matchHistoryGlobalLimit` 筆。
 - `panelPosition` 是全域位置，不分社團。
 
@@ -93,12 +95,33 @@ const STATE = {
 各區塊責任：
 
 - `config`：目前生效中的正式設定。
-- `scanRuntime`：最近掃描結果、最近貼文、掃描錯誤、掃描中與載入更多狀態。
+- `scanRuntime`：最近掃描結果、最近 scan items、掃描錯誤、掃描中與載入更多狀態。
 - `notificationRuntime`：最近一次通知狀態。
 - `routeRuntime`：Facebook SPA route、route settle 與目前 group id。
 - `uiRuntime`：panel 掛載、panel 位置、拖曳狀態。
-- `schedulerRuntime`：MutationObserver、scan timer、refresh timer、route/render interval。
-- `sessionRuntime`：本次 userscript session 內已初始化的 group set。
+- `schedulerRuntime`：MutationObserver、scan timer、refresh timer、route/render interval，以及本腳本操作 Facebook UI 時使用的短暫 mutation suppression window。
+- `sessionRuntime`：本次 userscript session 內已初始化的 scan scope set。
+
+## Scan Target 與 Scope
+
+掃描目標由 `getCurrentScanTarget()` 統一建立，避免 orchestration 層直接解析 URL。
+
+目前支援：
+
+- `kind: "posts"`：社團貼文 feed。
+- `kind: "comments"`：單篇貼文頁留言；會先掃目前已載入 DOM，並在自動載入更多啟用時做 scroll-only 多視窗收集。
+
+主要術語：
+
+- `groupId`：Facebook 社團識別，也是設定與 history 的主要分區。
+- `parentPostId`：留言模式的父貼文 ID。
+- `scopeId`：baseline / seen / dedupe 的分區。
+
+目前設計決策：
+
+- config 是 group-scoped：同一社團內 posts/comments 共用關鍵字、通知端點、暫停狀態與 refresh 設定。
+- baseline / seen 是 target-scoped：不同單篇貼文留言頁不共用 seen baseline。
+- match history 是全域最近清單，紀錄項目仍保留 group id 與 group name。
 
 重要寫入應優先透過現有 patch helper：
 
@@ -117,14 +140,14 @@ const STATE = {
 掃描入口是 `runScan(reason)`，目前已整理成薄 orchestration：
 
 1. `createScanExecutionContext(reason)` 建立 page / group / rule / baseline context。
-2. `collectScanExecutionData(scanContext)` 收集貼文並建立 include / exclude 摘要。
-3. `markGroupInitializedAfterScan(groupId, baselineMode)` 完成第一次掃描 baseline 註記。
-4. `commitScanState(groupId, summaries, matchesToNotify)` 發送通知、寫入 history、標記 seen。
+2. `collectScanExecutionData(scanContext)` 收集 scan items 並建立 include / exclude 摘要。
+3. `markScopeInitializedAfterScan(scopeId, baselineMode)` 完成第一次掃描 baseline 註記。
+4. `commitScanState(groupId, scopeId, summaries, matchesToNotify)` 發送通知、寫入 history、標記 seen。
 5. `buildSuccessfulScanRuntimeState(...)` 建立最新 panel/debug state。
 6. `applySuccessfulScanRuntimeState(...)` 套用 runtime state。
 7. finally 階段重排 refresh 並重繪 panel。
 
-第一次進入某社團時會進入 baseline mode：建立 seen baseline，不對既有貼文發通知。從暫停切回開始時，目前語義是 restart current group：清掉該社團 seen baseline，並重新掃描。
+第一次進入某 scan scope 時會進入 baseline mode：建立 seen baseline，不對既有項目發通知。從暫停切回開始時，目前語義是 restart current target：清掉目前 scan scope 的 seen baseline，並重新掃描。
 
 ## 貼文收集與抽取
 
@@ -135,7 +158,7 @@ const STATE = {
 - `preparePostContainerForExtraction()` 展開折疊文字，並執行最小 permalink warmup。
 - `extractPostRecord()` 統一輸出貼文資料形狀。
 - `getNonPostReason()` 過濾排序控制列、留言回覆等非貼文內容。
-- `collectPostsAcrossWindows()` 在保守捲動下累積多個可見視窗的唯一貼文。
+- `collectFeedPostsAcrossWindows()` 在保守捲動下累積多個可見視窗的唯一貼文。
 
 貼文資料形狀保留：
 
@@ -156,27 +179,44 @@ const STATE = {
 
 目前 `timestampText` 與 `timestampEpoch` 只保留欄位形狀，不再從 Facebook DOM 抽取時間。不要在沒有明確需求時重新加入時間解析，因為這通常會增加 selector 脆弱性。
 
+## 留言收集與抽取
+
+留言模式會先掃描單篇貼文頁中已載入在 DOM 裡的留言；若自動載入更多已啟用，會透過 scroll-only 的保守捲動嘗試載入更多留言。
+
+主要流程：
+
+- `collectCommentContainers()` 以 `comment_id` / `reply_comment_id` permalink anchor 收集候選留言容器。
+- `collectSettledCommentCandidates()` 在短時間內等待留言 DOM 穩定，降低 reload 後只抓到部分留言的機率。
+- `extractCommentRecord()` 輸出 `itemKind: "comment"`、`commentId`、`parentPostId` 與 canonical comment permalink。
+- `collectCommentsAcrossWindows()` 是 comments 專用跨視窗 collector，負責累積留言、保守捲動、等待 DOM 穩定與回填 scan meta。
+
+留言自動載入邊界：
+
+- `collectCommentScrollTargets()` 收集留言附近與頁面中可能的可捲容器，避免只依賴 `document.scrollingElement`。
+- 每輪正式掃描只做 scroll-only 載入；通知、seen、baseline 仍由 `runScan()` 的 commit 階段處理。
+- 點擊「查看更多留言」或「查看先前留言」屬於更高互動等級，應與 scroll-only 分開設計與驗證。
+
 ## 去重與快取
 
-貼文 identity 目前優先順序：
+scan item identity 目前優先順序：
 
-1. `postId`
-2. canonical permalink
-3. author / timestamp / text fragment 組成的 composite key
-4. legacy fallback key
+1. comment item：`commentId` / comment permalink / parent post + composite fallback。
+2. feed post item：`postId` / canonical permalink / composite fallback。
+3. legacy fallback key。
 
-`getPostKeyAliases(post)` 會為同一篇貼文建立多組等價 key，降低不同掃描輪次抽到不同欄位時造成重複通知的機率。
+`getPostKeyAliases(item)` 會為同一個 scan item 建立多組等價 key，降低不同掃描輪次抽到不同欄位時造成重複通知的機率。
 
-目前有兩個掃描最佳化：
+目前有兩類掃描最佳化：
 
-- `top-post shortcut`：例行掃描時比對最新最上方貼文 snapshot；若相同，可跳過深度掃描。
-- `seen-stop`：在「新貼文」排序且已有 seen 紀錄時，連續遇到足夠數量的已看過貼文後停止更深掃描。
+- `target-aware sort preparation`：若使用者設定開啟，掃描前會依目前 target 保守嘗試切到偏好排序。社團貼文模式偏好「新貼文」；單篇貼文留言模式偏好「由新到舊」。排序辨識、選單選項搜尋與點擊結果應維持在 Page Context / Scheduling 的排序 helper，不塞進 scan orchestration。
+- `top-item shortcut`：社團貼文模式比對最新最上方貼文；單篇貼文留言模式比對最新最上方留言。若相同，可跳過深度掃描並沿用上一輪完整掃描快取。
+- `seen-stop`：feed-post only。在「新貼文」排序且已有 seen 紀錄時，連續遇到足夠數量的已看過貼文後停止更深掃描。
 
-這些都是保守最佳化。新增功能若會改變掃描深度、排序假設或 identity key，必須同步檢查這兩條捷徑。
+這些都是保守最佳化。新增功能若會改變掃描深度、排序假設或 identity key，必須同步檢查這兩條捷徑。留言模式目前不使用 seen-stop。
 
 ## 通知架構
 
-通知由 `notifyForPost(post)` 分發。
+通知由 `notifyForScanItem(item)` 分發。
 
 通道定義集中於 `NOTIFICATION_CHANNEL_DEFINITIONS`，目前包含：
 
@@ -204,7 +244,7 @@ const STATE = {
 - view state：`getPanelViewState()`、`getPanelStatusViewState()`、`getPanelDebugViewState()`。
 - section update：`updatePanelControls()`、`updatePanelStatusSection()`、`updatePanelDebugSection()`。
 - settings modal：讀草稿、套用草稿、持久化 refresh / notification 設定。
-- history modal：讀全域 match history 並顯示可開啟貼文連結。
+- history modal：讀全域 match history 並顯示可開啟 scan item 連結。
 - help modal：definition-driven 的 include / ntfy / Discord 說明。
 - panel drag：位置正規化、viewport clamp、持久化。
 
@@ -222,7 +262,8 @@ const STATE = {
 
 掃描與刷新排程：
 
-- MutationObserver 新增節點時透過 debounce 安排 scan。
+- MutationObserver root 由 `findObserverRoot(scanTarget)` 選擇：feed target 優先 feed root，comment target 優先留言捲動容器或 main 區。
+- MutationObserver 透過 `shouldRescanForMutation(scanTarget, mutations)` 判斷是否 debounce 安排 scan；feed target 保留較寬的新增節點訊號，comment target 則使用 comment permalink、留言文字與 direct-target attributes / characterData 訊號，並先套用 mutation suppression，避免本腳本的排序操作自觸發重掃。
 - route 切換後套用 `ROUTE_SETTLE_MS`，避免抓到半穩定 DOM。
 - refresh 只在監控啟用且位於支援的 group page 時安排。
 - refresh 秒數可用 jitter range 或 fixed seconds。
@@ -246,8 +287,10 @@ smoke test 透過 `__FB_GROUP_REFRESH_TEST_MODE__` 載入 userscript，只暴露
 - keyword matcher
 - refresh payload 與 scan limits
 - permalink / postId extraction helper
-- post identity aliases、dedupe、seen store、history merge
-- top-post shortcut 與 seen-stop helper
+- scan target、comment sort、comment permalink / author / DOM settle helper
+- scan item identity aliases、dedupe、scope-scoped seen store、history merge
+- top-item shortcut 與 feed-only seen-stop helper
+- target-aware observer root 與 mutation rescan helper
 - notification formatting
 - runtime state helper
 
@@ -259,9 +302,9 @@ smoke test 透過 `__FB_GROUP_REFRESH_TEST_MODE__` 載入 userscript，只暴露
 
 - 新設定：走 `DEFAULT_CONFIG`、config patch helper、settings modal、storage facade。
 - 新關鍵字語法：改 `Matcher / Rules`，並補 smoke test。
-- 新抽取欄位：改 extractor 與 post record shape，並同步 debug panel。
+- 新抽取欄位：改 extractor 與 scan item record shape，並同步 debug panel。
 - 新 notification channel：改 notification channel registry、runner map、settings UI 與 opt-in 文件。
-- 新掃描策略：改 scan engine / scheduler，並檢查 top-post shortcut 與 seen-stop。
+- 新掃描策略：改 scan engine / scheduler，並檢查 top-item shortcut 與 seen-stop。
 - 新 UI 顯示：優先從 view state 與 section renderer 切入，不直接散讀 `STATE`。
 
 避免事項：

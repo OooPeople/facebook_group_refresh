@@ -23,7 +23,7 @@ cache/
 secrets/
 
 # Internal-only notes
-chatgpt_review*.md
+review*.md
 
 # Browser automation artifacts
 playwright-report/

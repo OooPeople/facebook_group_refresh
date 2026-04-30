@@ -2,22 +2,25 @@
 
 用於 Facebook 社團頁面的 Tampermonkey userscript。
 
-它的目標很單純：在你已登入 Facebook 的瀏覽器裡，保守地監看目前社團的新貼文，套用包含 / 排除關鍵字規則，並在找到符合條件的新貼文時送出通知。
+它的目標很單純：在你已登入 Facebook 的瀏覽器裡，保守地監看目前社團的新貼文，或單篇貼文頁中的留言，套用包含 / 排除關鍵字規則，並在找到符合條件的新項目時送出通知。
 
 這個專案刻意不走大量爬取或背景服務，而是優先使用瀏覽器內 userscript、既有登入 session，以及可診斷的本地 debug 面板。
 
 ## 功能概要
 
-- 監看 `https://www.facebook.com/groups/*` 頁面
+- 監看 `https://www.facebook.com/groups/*` 社團頁與單篇貼文頁
 - 支援包含關鍵字與排除關鍵字
 - 支援 `;` 作為 OR、空格作為 AND
 - 支援桌面通知
 - 支援 opt-in 的 `ntfy` 與 Discord Webhook 通知
-- 支援保守 refresh 與自動載入更多貼文
-- 支援貼文去重、通知紀錄與 debug 面板
-- 關鍵字、通知設定、刷新設定與 dedupe 會依社團 ID 個別保存
-- 多視窗使用時請遵守「一個視窗 = 一個分頁 = 一個社團」
-- 可同時開啟多個視窗，但每個視窗監視的社團必須不同
+- 社團貼文模式支援保守 refresh 與自動載入更多貼文
+- 單篇貼文留言模式支援保守 refresh 與 scroll-only 自動載入更多留言
+- 開始監控後可自動嘗試切到目前模式偏好的最新排序：社團貼文為 `新貼文`，單篇貼文留言為 `由新到舊`
+- 例行掃描支援最上方項目快篩；最上方貼文或留言未變時可沿用上一輪完整掃描快取
+- 支援 scan item 去重、通知紀錄與 debug 面板
+- debug 面板會顯示收集策略、排序調整結果、快篩狀態、抽取摘要與通知狀態
+- 關鍵字、通知設定與刷新設定依社團 ID 保存；baseline / seen 依 scan target scope 保存
+- 可同時開啟多個不同社團視窗；同社團不同單篇貼文留言視窗共用設定，但 seen baseline 分開
 
 ## 快速開始
 
@@ -42,6 +45,8 @@
 
 ```text
 https://www.facebook.com/groups/<group-id>/
+https://www.facebook.com/groups/<group-id>/posts/<post-id>
+https://www.facebook.com/groups/<group-id>/permalink/<post-id>
 ```
 
 進入社團頁後，建議手動重新整理一次，讓腳本完整初始化。
@@ -68,9 +73,11 @@ README 只保留快速導覽。完整操作請看：
 
 - 主面板按鈕與設定說明
 - 關鍵字規則與範例
+- 自動載入更多項目、自動排序與每次目標掃描項目數
 - `ntfy` 設定步驟
 - Discord Webhook 設定步驟
-- 通知與去重邏輯
+- debug 面板可診斷的欄位
+- 通知、scan target 與去重邏輯
 - 常見不通知原因與使用注意事項
 
 ## 專案結構
@@ -134,8 +141,10 @@ facebook_group_refresh/
 - 只在 `www.facebook.com/groups/*` 啟用
 - 以保守 refresh、溫和捲動與最小頁面互動為原則
 - 不處理登入、自動留言、按讚、發文、加入社團或任何互動
-- 支援多個不同社團同時監視，但建議固定為一個視窗只跑一個社團
-- 不要同時開兩個以上視窗監視同一個社團
+- 留言模式只做目前 DOM 與 scroll-only 載入更多，不主動點擊「查看更多留言」或「查看先前留言」
+- 支援多個不同社團同時監視，但社團貼文 feed 建議固定為一個視窗只跑一個社團
+- 同一社團的多個單篇貼文留言視窗會共用社團設定，但各自使用不同 seen baseline
+- 不要同時開兩個以上視窗監視同一個社團貼文 feed
 - Facebook DOM 與貼文型態會變動，少數貼文可能仍抓不到穩定 permalink 或 `postId`
 - `timestampText` / `timestampEpoch` 目前保留欄位形狀，但暫不做貼文時間解析
 
@@ -159,9 +168,10 @@ node .\scripts\smoke_check_userscript.js
 - text normalization / keyword matcher
 - config normalization 與 refresh payload builder
 - permalink canonicalization / postId extraction
-- dedupe / seen-stop / history merge
+- scan item dedupe / seen-stop / history merge
+- comment target、comment sort、observer root 與 mutation relevance policy helper
 - notification formatting
-- top-post shortcut eligibility
+- top-item shortcut eligibility
 - panel drag / position helper
 - scan / notification runtime 的純邏輯 helper
 

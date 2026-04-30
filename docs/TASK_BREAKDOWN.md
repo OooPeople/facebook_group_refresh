@@ -11,10 +11,13 @@
 - V1 Tampermonkey userscript 主功能已落地。
 - include / exclude 關鍵字規則已可用。
 - GM desktop、ntfy、Discord Webhook 通知已可用，其中遠端通知維持 opt-in。
-- group-scoped config、seen posts、latest top post、latest scan posts 已落地。
+- group-scoped config、scope-scoped seen items、最上方項目 snapshot、latest scan cache 已落地。
 - match history 已整理為全域最近紀錄。
-- permalink / postId / fallback key 的去重策略已落地。
-- baseline mode、top-post shortcut、seen-stop、保守 scroll load-more 已落地。
+- permalink / postId / commentId / fallback key 的去重策略已落地。
+- baseline mode、top-item shortcut、feed-only seen-stop、保守 scroll load-more 已落地。
+- 單篇貼文留言模式已落地，支援已載入 DOM 掃描與 scroll-only 自動載入更多留言。
+- scan target / scope 邊界已定義：config 仍以社團為 scope，baseline / seen 以 scan target 為 scope。
+- observer root 與 mutation relevance 已有 target-aware 入口；留言模式會依 comment permalink、留言文字與 direct-target attributes / characterData 訊號觸發 mutation 重掃，並有 mutation suppression 避免排序操作自觸發。
 - 主面板、設定視窗、help modal、history modal、debug panel、panel drag 已落地。
 - `STATE` runtime 分區與 mutation helper 已完成。
 - `scripts/smoke_check_userscript.js` 已覆蓋主要純邏輯與 policy helper。
@@ -42,11 +45,13 @@
 
 - [ ] 視需要更新 `README.md` 的文件索引，標註哪些文件是目前入口、哪些是歷史紀錄。
 - [x] 將舊的 `V1_SPEC.md`、`REFACTOR_PLAN.md`、`STATE_REFACTOR_PLAN.md` 移到 `docs/archive/`。
-- [ ] 新增功能完成後，同步更新 `docs/USAGE.md`。
+- [ ] 新增功能完成後，同步更新 `docs/USAGE.md` 與必要的架構文件。
 
 ## 目前具體功能計畫
 
-- [ ] 單篇貼文留言監控：依 [`COMMENT_MONITOR_PLAN.md`](./COMMENT_MONITOR_PLAN.md) 分階段實作、測試與回歸，且不得影響既有社團貼文監控功能。
+- [x] 單篇貼文留言監控：已完成 target-aware scope、target-aware 排序偵測與掃描前自動切回偏好排序、target-aware observer relevance、debug 顯示、scroll-only 自動載入更多留言、最上方留言快篩與 scan capability 顯示。
+- [ ] 若後續要支援點擊「查看更多留言」或「查看先前留言」，必須獨立設計，不混入目前 scroll-only collector。
+- [ ] 若後續需要 target-scoped config，先設計 `configScopeId`，不要在現有 group-scoped config helper 中直接散落 `if comments`。
 
 ## 新功能前置流程
 
@@ -55,7 +60,7 @@
 1. 明確寫出使用者可見行為。
 2. 判斷是否會把資料送出本機；若會，必須維持 opt-in。
 3. 判斷主要改動區段：config、matcher、extractor、scan、notifier、UI、storage 或 lifecycle。
-4. 確認是否會影響 baseline、dedupe、top-post shortcut、seen-stop。
+4. 確認是否會影響 baseline、dedupe、top-item shortcut、seen-stop。
 5. 先決定 smoke test 要補哪個純邏輯或 policy helper。
 6. 實作後執行：
 
@@ -134,7 +139,7 @@ node .\scripts\smoke_check_userscript.js
 - `preparePostContainerForExtraction()`
 - `extractPostRecord()`
 - permalink / postId helper
-- debug panel post rows
+- debug panel scan item rows
 
 注意事項：
 
@@ -150,27 +155,26 @@ node .\scripts\smoke_check_userscript.js
 - 調整掃描深度。
 - 調整 auto-load-more。
 - 調整 baseline / seen / history 行為。
-- 修改 top-post shortcut 或 seen-stop。
+- 修改 top-item shortcut 或 seen-stop。
 
 建議修改點：
 
 - `SCAN_LIMITS`
-- `collectScanPosts()`
-- `collectPostsAcrossWindows()`
-- `buildPostScanSummary()`
+- `collectScanItems()`
+- `collectFeedPostsAcrossWindows()`
+- `buildScanItemSummary()`
 - `commitScanState()`
-- `getPostKey()`
-- `getPostKeyAliases()`
-- `markPostSeen()`
+- `getPostKey()` / `getPostKeyAliases()`，目前名稱保留但語意已涵蓋 scan item
+- `markItemSeen()`
 - `addMatchHistory()`
 - smoke test identity / seen / history
 
 注意事項：
 
-- 同一篇貼文在 postId、permalink 或 fallback 欄位變動時，仍應盡量被視為同一篇。
-- seen store 是 per-group；不要清掉其他社團。
+- 同一個 scan item 在 id、permalink 或 fallback 欄位變動時，仍應盡量被視為同一項。
+- seen store 是 per-scope；不要清掉其他社團或其他單篇貼文留言 scope。
 - match history 是全域最近清單；不要重新切回 per-group，除非有明確需求。
-- 手動開始目前語義是 restart current group，會清掉該社團 seen baseline。
+- 手動開始目前語義是 restart current target，會清掉目前 scan scope 的 seen baseline。
 
 ### 5. Notification 類
 

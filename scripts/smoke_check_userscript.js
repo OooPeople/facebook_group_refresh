@@ -735,14 +735,34 @@ function runConfigAndLayoutTests(hooks) {
 
     assertDeepEqual(
       hooks.buildNotificationConfigPatch({
+        enableGmNotification: 0,
+        enableNtfyNotification: 1,
+        enableDiscordNotification: "",
         ntfyTopic: "  my-topic  ",
         discordWebhook: "  https://discord.example/webhook  ",
       }),
       {
+        enableGmNotification: false,
+        enableNtfyNotification: true,
+        enableDiscordNotification: false,
         ntfyTopic: "my-topic",
         discordWebhook: "https://discord.example/webhook",
       },
-      "Notification config builder should normalize endpoint fields."
+      "Notification config builder should normalize channel toggles and endpoint fields."
+    );
+
+    assertDeepEqual(
+      hooks.buildNotificationConfigPatch({
+        ntfyTopic: "  legacy-topic  ",
+        discordWebhook: "  https://discord.example/webhook  ",
+      }),
+      {
+        ntfyTopic: "legacy-topic",
+        enableNtfyNotification: true,
+        discordWebhook: "https://discord.example/webhook",
+        enableDiscordNotification: true,
+      },
+      "Notification config builder should keep legacy endpoint-only settings enabled."
     );
 
     assertDeepEqual(
@@ -759,7 +779,13 @@ function runConfigAndLayoutTests(hooks) {
 
     assertDeepEqual(
       hooks.hydrateNotificationConfigFromStorage(),
-      { ntfyTopic: "", discordWebhook: "" },
+      {
+        enableGmNotification: true,
+        enableNtfyNotification: false,
+        enableDiscordNotification: false,
+        ntfyTopic: "",
+        discordWebhook: "",
+      },
       "Notification hydration should reuse persisted defaults when storage is empty."
     );
 
@@ -1228,6 +1254,9 @@ function clearConfigStorage(context) {
     "fb_group_refresh_exclude",
     "fb_group_refresh_paused",
     "fb_group_refresh_debug_visible",
+    "fb_group_refresh_enable_gm_notification",
+    "fb_group_refresh_enable_ntfy_notification",
+    "fb_group_refresh_enable_discord_notification",
     "fb_group_refresh_ntfy_topic",
     "fb_group_refresh_discord_webhook",
     "fb_group_refresh_auto_load_more_posts",
@@ -1289,6 +1318,7 @@ function runGroupScopedConfigTests(hooks, context) {
     assertEqual(firstGroupConfig.includeKeywords, "alpha only", "First group should load its own include keywords.");
     assertEqual(firstGroupConfig.excludeKeywords, "sold", "First group should load its own exclude keywords.");
     assertEqual(firstGroupConfig.ntfyTopic, "topic-a", "First group should load its own ntfy topic.");
+    assertEqual(firstGroupConfig.enableNtfyNotification, true, "First group should enable legacy endpoint-only ntfy settings.");
     assertEqual(firstGroupConfig.paused, false, "First group should load its own paused flag.");
     assertEqual(firstGroupConfig.autoAdjustSort, false, "First group should load its own sort-adjust setting.");
     assertEqual(firstGroupConfig.autoLoadMorePosts, false, "First group should load its own load-more setting.");
@@ -1299,6 +1329,7 @@ function runGroupScopedConfigTests(hooks, context) {
     assertEqual(secondGroupConfig.includeKeywords, "beta only", "Second group should not reuse the first group's include keywords.");
     assertEqual(secondGroupConfig.excludeKeywords, "taken", "Second group should not reuse the first group's exclude keywords.");
     assertEqual(secondGroupConfig.ntfyTopic, "topic-b", "Second group should load its own ntfy topic.");
+    assertEqual(secondGroupConfig.enableNtfyNotification, true, "Second group should enable legacy endpoint-only ntfy settings.");
     assertEqual(secondGroupConfig.paused, true, "Second group should load its own paused flag.");
     assertEqual(secondGroupConfig.autoAdjustSort, true, "Second group should load its own sort-adjust setting.");
     assertEqual(secondGroupConfig.autoLoadMorePosts, true, "Second group should load its own load-more setting.");
@@ -1338,6 +1369,7 @@ function runGroupScopedConfigTests(hooks, context) {
     assertEqual(migratedConfig.includeKeywords, "legacy include", "Legacy include keywords should migrate into the requested group.");
     assertEqual(migratedConfig.excludeKeywords, "legacy exclude", "Legacy exclude keywords should migrate into the requested group.");
     assertEqual(migratedConfig.ntfyTopic, "legacy-topic", "Legacy notification settings should migrate into the requested group.");
+    assertEqual(migratedConfig.enableNtfyNotification, true, "Legacy ntfy endpoint should migrate as an enabled channel.");
     assertEqual(migratedConfig.paused, false, "Legacy paused flag should migrate into the requested group.");
     assertEqual(migratedConfig.minRefreshSec, 22, "Legacy refresh min should migrate into the requested group.");
     assertEqual(migratedConfig.maxRefreshSec, 28, "Legacy refresh max should migrate into the requested group.");
@@ -1347,6 +1379,7 @@ function runGroupScopedConfigTests(hooks, context) {
     assertEqual(migratedBucket.includeKeywords, "legacy include", "Migrated bucket should persist include keywords.");
     assertEqual(migratedBucket.excludeKeywords, "legacy exclude", "Migrated bucket should persist exclude keywords.");
     assertEqual(migratedBucket.ntfyTopic, "legacy-topic", "Migrated bucket should persist notification settings.");
+    assertEqual(migratedBucket.enableNtfyNotification, true, "Migrated bucket should persist the inferred ntfy channel flag.");
     assertEqual(migratedBucket.paused, false, "Migrated bucket should persist the paused flag.");
     assertEqual(migratedBucket.minRefreshSec, 22, "Migrated bucket should persist refresh settings.");
     assertEqual(migratedBucket.maxPostsPerScan, 6, "Migrated bucket should persist scan target settings.");
@@ -1381,6 +1414,7 @@ function runGroupScopedConfigTests(hooks, context) {
       {
         includeKeywords: "legacy shared alpha",
         ntfyTopic: "legacy-shared-topic",
+        enableNtfyNotification: true,
       },
       "Legacy shared config buckets should migrate into per-group config keys."
     );
@@ -2716,6 +2750,45 @@ function runPresentationTests(hooks) {
       hooks.buildNotificationPayload({ itemKind: "comment", text: "alpha comment" }).title,
       "Facebook group comment match",
       "Comment notification payloads should use the comment-specific title."
+    );
+
+    assertEqual(
+      hooks.isNotificationChannelEnabled(
+        { enabledField: "enableNtfyNotification" },
+        { enableNtfyNotification: false }
+      ),
+      false,
+      "Notification channel helper should respect disabled channel flags."
+    );
+    assertEqual(
+      hooks.isNotificationChannelEnabled(
+        { enabledField: "enableDiscordNotification" },
+        { enableDiscordNotification: true }
+      ),
+      true,
+      "Notification channel helper should respect enabled channel flags."
+    );
+
+    let disabledRunnerCalled = false;
+    const disabledTask = hooks.createNotificationChannelTask(
+      {
+        id: "ntfy",
+        enabledField: "enableNtfyNotification",
+        skippedStatus: "ntfy_skipped",
+      },
+      {
+        ntfy: () => {
+          disabledRunnerCalled = true;
+          return Promise.resolve("ntfy_sent");
+        },
+      },
+      { enableNtfyNotification: false }
+    );
+    disabledTask.run();
+    assertEqual(
+      disabledRunnerCalled,
+      false,
+      "Disabled notification channel tasks should not call their runner."
     );
   });
 

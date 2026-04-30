@@ -83,10 +83,11 @@ https://www.facebook.com/groups/<group-id>/permalink/<post-id>
 - 自動載入更多項目
 - 開始後自動調整成最新排序
 - 每次目標掃描項目數
+- 通知通道：桌面通知、`ntfy`、Discord Webhook
 - `ntfy topic`
 - Discord Webhook URL
 
-目前設定範圍是「同一社團共用」。同一個社團內的社團貼文模式與單篇貼文留言模式，會共用包含 / 排除關鍵字、通知端點、刷新秒數、暫停狀態與目標掃描數。
+目前設定範圍是「同一社團共用」。同一個社團內的社團貼文模式與單篇貼文留言模式，會共用包含 / 排除關鍵字、通知通道、通知端點、刷新秒數、暫停狀態與目標掃描數。
 
 ### `除錯`
 
@@ -191,17 +192,17 @@ debug 面板也會列出本輪收集策略、是否允許捲動收集，以及�
 
 ### `ntfy topic`
 
-若有填寫 `ntfy topic`，符合條件的通知會同步送到 `ntfy`。
+需要勾選 `ntfy` 通道並填寫 `ntfy topic`，符合條件的通知才會同步送到 `ntfy`。
 
 ### Discord Webhook URL
 
-若有填寫 Discord Webhook URL，符合條件的通知會同步送到指定 Discord 頻道。
+需要勾選 Discord Webhook 通道並填寫 Discord Webhook URL，符合條件的通知才會同步送到指定 Discord 頻道。
 
-留空則不傳送 Discord 通知。
+未勾選通道或端點留空，都不會傳送該遠端通知。
 
 ### 測試通知
 
-會送出一則測試通知，方便確認桌面通知、`ntfy` 與 Discord Webhook 是否正常。
+會依目前勾選的通道送出一則測試通知，方便確認桌面通知、`ntfy` 與 Discord Webhook 是否正常。
 
 測試通知不會寫入貼文去重資料。
 
@@ -215,13 +216,15 @@ debug 面板也會列出本輪收集策略、是否允許捲動收集，以及�
 2. 在 App 內新增一個 topic，例如 `my-facebook-alerts`
 3. 建議 topic 使用英文字母、數字、減號或底線
 4. 回到 Facebook 社團頁，在腳本面板中按 `設定`
-5. 將相同 topic 填入 `ntfy topic`
-6. 按一次 `測試通知` 確認手機是否收到提醒
+5. 勾選 `ntfy` 通道
+6. 將相同 topic 填入 `ntfy topic`
+7. 按一次 `測試通知` 確認手機是否收到提醒
 
 ### 常見不會送出的情況
 
 - `ntfy topic` 是空白
 - `ntfy topic` 已清空並重新儲存
+- `ntfy` 通道未勾選
 - 網路異常，或 `ntfy` 端暫時沒有成功接收通知
 
 ## Discord Webhook 設定
@@ -235,13 +238,15 @@ debug 面板也會列出本輪收集策略、是否允許捲動收集，以及�
 3. 點選 `整合` → `Webhooks` → `新 Webhook`
 4. 複製 Webhook URL
 5. 回到 Facebook 社團頁，在腳本面板中按 `設定`
-6. 將 URL 貼到 `Discord Webhook URL`
-7. 按一次 `測試通知` 確認該頻道是否收到提醒
+6. 勾選 Discord Webhook 通道
+7. 將 URL 貼到 `Discord Webhook URL`
+8. 按一次 `測試通知` 確認該頻道是否收到提醒
 
 ### 常見不會送出的情況
 
 - `Discord Webhook URL` 是空白
 - `Discord Webhook URL` 已清空並重新儲存
+- Discord Webhook 通道未勾選
 - Webhook 已失效、沒有權限，或 Discord 端暫時沒有成功接收通知
 
 ## 通知與去重邏輯
@@ -267,7 +272,7 @@ debug 面板也會列出本輪收集策略、是否允許捲動收集，以及�
 
 ### 多社團視窗
 
-- include / exclude 關鍵字、通知端點、刷新設定與暫停狀態依目前社團 ID 保存
+- include / exclude 關鍵字、通知通道與端點、刷新設定與暫停狀態依目前社團 ID 保存
 - dedupe / baseline 依目前掃描 scope 保存；不同單篇貼文留言頁會有各自的 seen baseline
 - 你可以同時開多個不同社團視窗，各自維持自己的設定與已看過狀態
 - 同一社團的多個留言視窗會共用社團設定，但留言 seen baseline 會依父貼文分開

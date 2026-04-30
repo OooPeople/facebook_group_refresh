@@ -10,7 +10,7 @@
 
 - V1 Tampermonkey userscript 主功能已落地。
 - include / exclude 關鍵字規則已可用。
-- GM desktop、ntfy、Discord Webhook 通知已可用，其中遠端通知維持 opt-in。
+- GM desktop、ntfy、Discord Webhook 通知已可用，且可在設定中獨立勾選；遠端通知維持 opt-in。
 - group-scoped config、scope-scoped seen items、最上方項目 snapshot、latest scan cache 已落地。
 - match history 已整理為全域最近紀錄。
 - permalink / postId / commentId / fallback key 的去重策略已落地。
@@ -199,6 +199,7 @@ node .\scripts\smoke_check_userscript.js
 注意事項：
 
 - 遠端通知必須 opt-in。
+- 通道開關屬於 notification config group，端點與通道狀態要一起經過 settings modal / persist helper。
 - 不要把 token、webhook、topic 寫進範例預設值。
 - 測試通知不得寫入 seen 或 match history。
 - Discord 內容目前會裁切到安全長度，新增通道也要注意大小限制。
@@ -255,7 +256,7 @@ node .\scripts\smoke_check_userscript.js
 4. 從暫停切回開始會重新開始目前社團監控。
 5. debug panel 可開關，且能看到最近掃描摘要。
 6. `查看紀錄` 可顯示命中紀錄。
-7. 設定視窗可保存 refresh、掃描數量、通知端點。
+7. 設定視窗可保存 refresh、掃描數量、通知通道與端點。
 8. 測試通知可送出，不寫入 seen / history。
 9. 新命中貼文只通知一次。
 10. exclude 命中可抑制通知。

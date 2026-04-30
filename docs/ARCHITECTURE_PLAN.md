@@ -44,6 +44,9 @@
 - `excludeKeywords`
 - `paused`
 - `debugVisible`
+- `enableGmNotification`
+- `enableNtfyNotification`
+- `enableDiscordNotification`
 - `ntfyTopic`
 - `discordWebhook`
 - `maxPostsPerScan`
@@ -55,7 +58,6 @@
 - `autoLoadMorePosts`
 - `autoAdjustSort`
 - `matchHistoryGlobalLimit`
-- `enableGmNotification`
 
 `INTERNAL_CONFIG` 只放內部 policy，例如目前的 `loadMoreMode`。不要把 internal-only 能力混進正式使用者設定，除非它真的要成為 UI 可調功能。
 
@@ -63,7 +65,7 @@
 
 - 優先使用 Tampermonkey `GM_getValue` / `GM_setValue` / `GM_deleteValue`。
 - 舊版 `localStorage` 只作為 migration fallback。
-- include / exclude、通知端點、paused、refresh 等設定已改為 per-group bucket；同社團的貼文模式與留言模式共用設定。
+- include / exclude、通知通道與端點、paused、refresh 等設定已改為 per-group bucket；同社團的貼文模式與留言模式共用設定。
 - `seenPosts` 使用 scan scope 獨立 key：社團貼文模式使用社團 ID，單篇貼文留言模式使用 `groupId:post:parentPostId:comments`。
 - `latestTopPosts`、`latestScanPosts` 使用獨立 key；社團貼文模式以 group id 為 key，單篇貼文留言模式以 scan scope id 為 key，服務最上方項目 shortcut。
 - `matchHistory` 是全域清單，保留最近 `matchHistoryGlobalLimit` 筆。
@@ -221,10 +223,10 @@ scan item identity 目前優先順序：
 通道定義集中於 `NOTIFICATION_CHANNEL_DEFINITIONS`，目前包含：
 
 - `gmDesktop`：本地 Tampermonkey `GM_notification`，預設啟用。
-- `ntfy`：需要使用者設定 topic 才送出。
-- `discord`：需要使用者設定 Webhook URL 才送出。
+- `ntfy`：需要使用者勾選通道並設定 topic 才送出。
+- `discord`：需要使用者勾選通道並設定 Webhook URL 才送出。
 
-遠端通知端點必須維持 opt-in。新增任何會把資料送出本機的通道前，應先確認需求與文件。
+每個通道都有對應的 `enable...Notification` config flag，由 settings modal 寫入 `notification` config group。遠端通知端點必須維持 opt-in；新增任何會把資料送出本機的通道前，應先確認需求與文件。
 
 通知內容由共用 formatter 建立：
 

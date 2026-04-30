@@ -11,8 +11,7 @@
 - 監看 `https://www.facebook.com/groups/*` 社團頁與單篇貼文頁
 - 支援包含關鍵字與排除關鍵字
 - 支援 `;` 作為 OR、空格作為 AND
-- 支援桌面通知
-- 支援 opt-in 的 `ntfy` 與 Discord Webhook 通知
+- 支援桌面通知、`ntfy` 與 Discord Webhook，三種通道可在設定中獨立勾選
 - 社團貼文模式支援保守 refresh 與自動載入更多貼文
 - 單篇貼文留言模式支援保守 refresh 與 scroll-only 自動載入更多留言
 - 開始監控後可自動嘗試切到目前模式偏好的最新排序：社團貼文為 `新貼文`，單篇貼文留言為 `由新到舊`
@@ -74,8 +73,7 @@ README 只保留快速導覽。完整操作請看：
 - 主面板按鈕與設定說明
 - 關鍵字規則與範例
 - 自動載入更多項目、自動排序與每次目標掃描項目數
-- `ntfy` 設定步驟
-- Discord Webhook 設定步驟
+- 通知通道勾選、`ntfy` 設定步驟與 Discord Webhook 設定步驟
 - debug 面板可診斷的欄位
 - 通知、scan target 與去重邏輯
 - 常見不通知原因與使用注意事項
@@ -152,7 +150,7 @@ facebook_group_refresh/
 
 - 腳本在本地瀏覽器執行
 - 關鍵字、設定、去重資料與通知紀錄保存在本機
-- 若有啟用 `ntfy` 或 Discord Webhook，通知內容只會送往你自行設定的端點
+- 若有勾選 `ntfy` 或 Discord Webhook 並填入端點，通知內容只會送往你自行設定的端點
 
 ## 開發驗證
 

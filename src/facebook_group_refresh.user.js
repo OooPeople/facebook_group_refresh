@@ -29,6 +29,9 @@
     exclude: "fb_group_refresh_exclude",
     paused: "fb_group_refresh_paused",
     debugVisible: "fb_group_refresh_debug_visible",
+    enableGmNotification: "fb_group_refresh_enable_gm_notification",
+    enableNtfyNotification: "fb_group_refresh_enable_ntfy_notification",
+    enableDiscordNotification: "fb_group_refresh_enable_discord_notification",
     ntfyTopic: "fb_group_refresh_ntfy_topic",
     discordWebhook: "fb_group_refresh_discord_webhook",
     latestTopPosts: "fb_group_refresh_latest_top_posts",
@@ -72,6 +75,9 @@
       normalize: true,
       removeWhenEmpty: true,
     },
+    enableGmNotification: { key: STORAGE_KEYS.enableGmNotification, type: "boolean" },
+    enableNtfyNotification: { key: STORAGE_KEYS.enableNtfyNotification, type: "boolean" },
+    enableDiscordNotification: { key: STORAGE_KEYS.enableDiscordNotification, type: "boolean" },
     paused: { key: STORAGE_KEYS.paused, type: "boolean" },
     debugVisible: { key: STORAGE_KEYS.debugVisible, type: "boolean" },
     autoLoadMorePosts: { key: STORAGE_KEYS.autoLoadMorePosts, type: "boolean" },
@@ -79,7 +85,13 @@
   });
   const CONFIG_GROUP_DEFINITIONS = Object.freeze({
     keyword: ["includeKeywords", "excludeKeywords"],
-    notification: ["ntfyTopic", "discordWebhook"],
+    notification: [
+      "enableGmNotification",
+      "enableNtfyNotification",
+      "enableDiscordNotification",
+      "ntfyTopic",
+      "discordWebhook",
+    ],
     monitoring: ["paused", "autoAdjustSort"],
     ui: ["debugVisible"],
   });
@@ -107,6 +119,8 @@
     autoAdjustSort: true,
     matchHistoryGlobalLimit: 10,
     enableGmNotification: true,
+    enableNtfyNotification: false,
+    enableDiscordNotification: false,
   };
   const INTERNAL_CONFIG = Object.freeze({
     loadMoreMode: "scroll",
@@ -272,9 +286,21 @@
     stableObservationCount: 2,
   });
   const NOTIFICATION_CHANNEL_DEFINITIONS = Object.freeze([
-    { id: "gmDesktop", skippedStatus: "" },
-    { id: "ntfy", skippedStatus: "ntfy_skipped" },
-    { id: "discord", skippedStatus: "discord_skipped" },
+    {
+      id: "gmDesktop",
+      enabledField: "enableGmNotification",
+      skippedStatus: "gm_skipped",
+    },
+    {
+      id: "ntfy",
+      enabledField: "enableNtfyNotification",
+      skippedStatus: "ntfy_skipped",
+    },
+    {
+      id: "discord",
+      enabledField: "enableDiscordNotification",
+      skippedStatus: "discord_skipped",
+    },
   ]);
 
   const STATE = {
@@ -588,6 +614,9 @@
     return [
       STORAGE_KEYS.include,
       STORAGE_KEYS.exclude,
+      STORAGE_KEYS.enableGmNotification,
+      STORAGE_KEYS.enableNtfyNotification,
+      STORAGE_KEYS.enableDiscordNotification,
       STORAGE_KEYS.ntfyTopic,
       STORAGE_KEYS.discordWebhook,
       STORAGE_KEYS.paused,
@@ -637,11 +666,31 @@
     };
   }
 
+  // 從舊版 notification key 載入設定；端點存在但尚無通道開關時保留舊版「有填就送」語義。
+  function buildLegacyNotificationConfigMigrationPatch(baseConfig = DEFAULT_CONFIG) {
+    const patch = loadLegacyPersistedConfigGroup("notification", baseConfig);
+
+    if (
+      loadStoredRawValue(STORAGE_KEYS.enableNtfyNotification) == null &&
+      normalizeText(patch.ntfyTopic)
+    ) {
+      patch.enableNtfyNotification = true;
+    }
+    if (
+      loadStoredRawValue(STORAGE_KEYS.enableDiscordNotification) == null &&
+      normalizeText(patch.discordWebhook)
+    ) {
+      patch.enableDiscordNotification = true;
+    }
+
+    return patch;
+  }
+
   // 將舊版全域設定欄位組成可遷移的 group config bucket。
   function buildLegacyGroupConfigMigrationPatch(baseConfig = DEFAULT_CONFIG) {
     return {
       ...loadLegacyPersistedConfigGroup("keyword", baseConfig),
-      ...loadLegacyPersistedConfigGroup("notification", baseConfig),
+      ...buildLegacyNotificationConfigMigrationPatch(baseConfig),
       ...loadLegacyPersistedConfigGroup("monitoring", baseConfig),
       ...loadLegacyRefreshConfigOverrides(baseConfig),
     };
@@ -1226,15 +1275,33 @@
     return nextPatch;
   }
 
-  // 將通知端點草稿整理成標準 config patch。
+  // 將通知通道開關與端點草稿整理成標準 config patch。
   function buildNotificationConfigPatch(patch = {}) {
     const nextPatch = {};
+    const hasExplicitNtfyToggle = hasOwnPatchValue(patch, "enableNtfyNotification");
+    const hasExplicitDiscordToggle = hasOwnPatchValue(patch, "enableDiscordNotification");
+
+    if (hasOwnPatchValue(patch, "enableGmNotification")) {
+      nextPatch.enableGmNotification = Boolean(patch.enableGmNotification);
+    }
+    if (hasExplicitNtfyToggle) {
+      nextPatch.enableNtfyNotification = Boolean(patch.enableNtfyNotification);
+    }
+    if (hasExplicitDiscordToggle) {
+      nextPatch.enableDiscordNotification = Boolean(patch.enableDiscordNotification);
+    }
 
     if (hasOwnPatchValue(patch, "ntfyTopic")) {
       nextPatch.ntfyTopic = normalizeText(patch.ntfyTopic);
+      if (!hasExplicitNtfyToggle) {
+        nextPatch.enableNtfyNotification = Boolean(nextPatch.ntfyTopic);
+      }
     }
     if (hasOwnPatchValue(patch, "discordWebhook")) {
       nextPatch.discordWebhook = normalizeText(patch.discordWebhook);
+      if (!hasExplicitDiscordToggle) {
+        nextPatch.enableDiscordNotification = Boolean(nextPatch.discordWebhook);
+      }
     }
 
     return nextPatch;
@@ -6653,7 +6720,7 @@
   // 本地桌面通知優先走 Tampermonkey GM_notification。
   function sendGmDesktopNotification(title, compactBody) {
     if (!STATE.config.enableGmNotification) {
-      return "";
+      return "gm_skipped";
     }
 
     try {
@@ -6666,6 +6733,14 @@
     } catch (error) {
       return "gm_failed";
     }
+  }
+
+  // 判斷指定通知通道是否已由使用者啟用。
+  function isNotificationChannelEnabled(definition, config = STATE.config) {
+    const enabledField = String(definition?.enabledField || "");
+    if (!enabledField) return true;
+
+    return Boolean(config?.[enabledField]);
   }
 
   // 透過 ntfy topic 傳送遠端通知；未設定 topic 時直接跳過。
@@ -6786,19 +6861,21 @@
   }
 
   // 依通道定義與執行器建立單一通知 task。
-  function createNotificationChannelTask(definition, runnerMap) {
+  function createNotificationChannelTask(definition, runnerMap, config = STATE.config) {
     return {
       channelId: definition.id,
       skippedStatus: definition.skippedStatus,
-      run: runnerMap[definition.id] || (() => Promise.resolve("")),
+      run: isNotificationChannelEnabled(definition, config)
+        ? runnerMap[definition.id] || (() => Promise.resolve(""))
+        : () => Promise.resolve(definition.skippedStatus),
     };
   }
 
   // 建立本輪通知通道任務，讓 orchestration 不直接依序寫死所有通道。
-  function createNotificationChannelTasks(post, payload) {
+  function createNotificationChannelTasks(post, payload, config = STATE.config) {
     const runnerMap = buildNotificationChannelRunnerMap(post, payload);
     return NOTIFICATION_CHANNEL_DEFINITIONS.map((definition) => {
-      return createNotificationChannelTask(definition, runnerMap);
+      return createNotificationChannelTask(definition, runnerMap, config);
     });
   }
 
@@ -6820,6 +6897,7 @@
     setLatestNotificationState(
       createPendingNotificationState(payload.title, payload.remoteBody, item.permalink)
     );
+    hydrateNotificationConfigFromStorage();
     const statusParts = await collectNotificationStatusParts(
       createNotificationChannelTasks(item, payload)
     );
@@ -7034,16 +7112,17 @@
       title: "ntfy 說明",
       closeButtonId: "fbgr-ntfy-help-close",
       bodyHtml: `
-        <div>不填 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy topic</code> 也可以使用，腳本仍會透過桌面通知在電腦上提醒你。</div>
-        <div>如果希望手機也同步收到提醒，可以另外設定 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy</code>。</div>
+        <div>未勾選 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy</code> 或未填 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy topic</code> 時，不會送出 ntfy 通知。</div>
+        <div>如果有勾選桌面通知，腳本仍會在電腦上提醒你；如果希望手機也同步收到提醒，再設定 ntfy。</div>
         <div style="display:grid;gap:6px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
           <div style="font-weight:bold;">建議步驟</div>
           <div>1. 在手機上安裝 ntfy App</div>
           <div>2. 在 App 內按 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">+</code>，輸入 topic，例如 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">my-facebook-alerts</code></div>
           <div>3. 建議使用英文字母、數字、減號或底線</div>
           <div>4. 回到電腦上的 Facebook 頁面，在腳本面板中按「設定」</div>
-          <div>5. 在 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy topic</code> 輸入完全相同的 topic</div>
-          <div>6. 按一次「測試通知」，確認手機 App 是否有收到通知；通知可能會有些許延遲</div>
+          <div>5. 勾選 ntfy 通道</div>
+          <div>6. 在 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">ntfy topic</code> 輸入完全相同的 topic</div>
+          <div>7. 按一次「測試通知」，確認手機 App 是否有收到通知；通知可能會有些許延遲</div>
         </div>
         <div style="font-size:12px;color:#d1d5db;">若你另外修改了刷新秒數、掃描項目數等其他設定，再按「儲存設定」。</div>
       `,
@@ -7053,18 +7132,19 @@
       title: "Discord Webhook 說明",
       closeButtonId: "fbgr-discord-help-close",
       bodyHtml: `
-        <div>不填 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">Discord Webhook URL</code> 也可以使用，腳本仍會透過桌面通知在電腦上提醒你。</div>
-        <div>如果希望通知直接送到 Discord 頻道，可以另外設定 Discord Webhook。</div>
+        <div>未勾選 Discord Webhook 或未填 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">Discord Webhook URL</code> 時，不會送出 Discord 通知。</div>
+        <div>如果有勾選桌面通知，腳本仍會在電腦上提醒你；如果希望通知直接送到 Discord 頻道，再設定 Discord Webhook。</div>
         <div style="display:grid;gap:6px;padding:10px;border:1px solid #374151;border-radius:10px;background:rgba(255,255,255,0.03);">
           <div style="font-weight:bold;">建議步驟</div>
           <div>1. 在 Discord 選擇目標頻道，進入「編輯頻道」</div>
           <div>2. 點選「整合」→「Webhooks」→「新 Webhook」</div>
           <div>3. 複製 Webhook URL</div>
           <div>4. 回到電腦上的 Facebook 頁面，在腳本面板中按「設定」</div>
-          <div>5. 在 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">Discord Webhook URL</code> 貼上剛剛複製的網址</div>
-          <div>6. 按一次「測試通知」，確認 Discord 頻道是否有收到通知；通知可能會有些許延遲</div>
+          <div>5. 勾選 Discord Webhook 通道</div>
+          <div>6. 在 <code style="background:rgba(255,255,255,0.08);padding:1px 4px;border-radius:4px;">Discord Webhook URL</code> 貼上剛剛複製的網址</div>
+          <div>7. 按一次「測試通知」，確認 Discord 頻道是否有收到通知；通知可能會有些許延遲</div>
         </div>
-        <div style="font-size:12px;color:#d1d5db;">留空則不會傳送 Discord 通知。</div>
+        <div style="font-size:12px;color:#d1d5db;">未勾選通道或留空 URL，則不會傳送 Discord 通知。</div>
       `,
     },
   });
@@ -7133,6 +7213,9 @@
       jitterEnabledEl: overlay.querySelector("#fbgr-jitter-enabled"),
       autoLoadMoreEl: overlay.querySelector("#fbgr-auto-load-more"),
       autoAdjustSortEl: overlay.querySelector("#fbgr-auto-adjust-sort"),
+      gmNotificationEl: overlay.querySelector("#fbgr-enable-gm-notification"),
+      ntfyNotificationEl: overlay.querySelector("#fbgr-enable-ntfy-notification"),
+      discordNotificationEl: overlay.querySelector("#fbgr-enable-discord-notification"),
       fixedRefreshEl: overlay.querySelector("#fbgr-fixed-refresh"),
       minRefreshEl: overlay.querySelector("#fbgr-refresh-min"),
       maxRefreshEl: overlay.querySelector("#fbgr-refresh-max"),
@@ -7147,6 +7230,9 @@
       !refs.jitterEnabledEl ||
       !refs.autoLoadMoreEl ||
       !refs.autoAdjustSortEl ||
+      !refs.gmNotificationEl ||
+      !refs.ntfyNotificationEl ||
+      !refs.discordNotificationEl ||
       !refs.fixedRefreshEl ||
       !refs.minRefreshEl ||
       !refs.maxRefreshEl ||
@@ -7168,6 +7254,9 @@
 
     return {
       jitterEnabled: settingsRefs.jitterEnabledEl.checked,
+      enableGmNotification: settingsRefs.gmNotificationEl.checked,
+      enableNtfyNotification: settingsRefs.ntfyNotificationEl.checked,
+      enableDiscordNotification: settingsRefs.discordNotificationEl.checked,
       ntfyTopic: normalizeText(settingsRefs.ntfyTopicEl.value),
       discordWebhook: normalizeText(settingsRefs.discordWebhookEl.value),
       autoLoadMorePosts: settingsRefs.autoLoadMoreEl.checked,
@@ -7196,6 +7285,9 @@
     );
     applyNotificationConfigPatch(
       {
+        enableGmNotification: draft.enableGmNotification,
+        enableNtfyNotification: draft.enableNtfyNotification,
+        enableDiscordNotification: draft.enableDiscordNotification,
         ntfyTopic: draft.ntfyTopic,
         discordWebhook: draft.discordWebhook,
       },
@@ -7214,6 +7306,9 @@
     if (!settingsRefs) return;
 
     settingsRefs.jitterEnabledEl.checked = STATE.config.jitterEnabled;
+    settingsRefs.gmNotificationEl.checked = STATE.config.enableGmNotification;
+    settingsRefs.ntfyNotificationEl.checked = STATE.config.enableNtfyNotification;
+    settingsRefs.discordNotificationEl.checked = STATE.config.enableDiscordNotification;
     settingsRefs.ntfyTopicEl.value = STATE.config.ntfyTopic;
     settingsRefs.discordWebhookEl.value = STATE.config.discordWebhook;
     settingsRefs.autoLoadMoreEl.checked = STATE.config.autoLoadMorePosts;
@@ -7224,13 +7319,16 @@
     settingsRefs.maxPostsPerScanEl.value = String(STATE.config.maxPostsPerScan);
   }
 
-  // 設定視窗中的測試通知只暫存通知端點，不修改其他刷新設定。
+  // 設定視窗中的測試通知只暫存通知設定，不修改其他刷新設定。
   function handleSettingsTestNotification(settingsRefs) {
     const draft = readSettingsModalDraft(settingsRefs);
     if (!draft) return;
 
     applyNotificationConfigPatch(
       {
+        enableGmNotification: draft.enableGmNotification,
+        enableNtfyNotification: draft.enableNtfyNotification,
+        enableDiscordNotification: draft.enableDiscordNotification,
         ntfyTopic: draft.ntfyTopic,
         discordWebhook: draft.discordWebhook,
       },
@@ -7303,22 +7401,35 @@
             <label for="fbgr-max-posts-per-scan">目標掃描項目數</label>
             <input id="fbgr-max-posts-per-scan" type="number" min="1" max="10" step="1" style="padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;" />
           </div>
-          <div style="display:grid;gap:4px;">
-            <label for="fbgr-ntfy-topic" style="display:flex;align-items:center;gap:6px;">
-              <span>ntfy topic (選填)</span>
-              <button id="fbgr-ntfy-help" type="button" style="width:20px;height:20px;border-radius:999px;border:1px solid #6b7280;background:#111827;color:#f9fafb;cursor:pointer;padding:0;line-height:1;">?</button>
-            </label>
-            <input id="fbgr-ntfy-topic" type="text" placeholder="例如：my-facebook-alerts" style="padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;" />
-          </div>
-          <div style="display:grid;gap:4px;">
-            <label for="fbgr-discord-webhook" style="display:flex;align-items:center;gap:6px;">
-              <span>Discord Webhook URL (選填)</span>
-              <button id="fbgr-discord-help" type="button" style="width:20px;height:20px;border-radius:999px;border:1px solid #6b7280;background:#111827;color:#f9fafb;cursor:pointer;padding:0;line-height:1;">?</button>
-            </label>
-            <input id="fbgr-discord-webhook" type="text" placeholder="例如：https://discord.com/api/webhooks/..." style="padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;" />
-          </div>
           <div style="padding:10px;border:1px solid #374151;border-radius:8px;background:rgba(255,255,255,0.03);color:#d1d5db;">
             系統會盡量湊滿你設定的項目數，最多可設定 10 筆。頁面內查看紀錄仍保留最新 10 筆符合關鍵字的通知紀錄。
+          </div>
+          <div style="font-size:16px;font-weight:bold;margin-top:4px;">通知</div>
+          <div style="display:grid;gap:8px;">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input id="fbgr-enable-gm-notification" type="checkbox" />
+              <span>桌面通知</span>
+            </label>
+          </div>
+          <div style="display:grid;gap:6px;">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input id="fbgr-enable-ntfy-notification" type="checkbox" />
+              <span>ntfy</span>
+              <button id="fbgr-ntfy-help" type="button" style="width:20px;height:20px;border-radius:999px;border:1px solid #6b7280;background:#111827;color:#f9fafb;cursor:pointer;padding:0;line-height:1;">?</button>
+            </label>
+            <div style="display:grid;gap:4px;padding-left:26px;">
+              <input id="fbgr-ntfy-topic" type="text" aria-label="ntfy topic" placeholder="ntfy topic，例如：my-facebook-alerts" style="padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;" />
+            </div>
+          </div>
+          <div style="display:grid;gap:6px;">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input id="fbgr-enable-discord-notification" type="checkbox" />
+              <span>Discord Webhook</span>
+              <button id="fbgr-discord-help" type="button" style="width:20px;height:20px;border-radius:999px;border:1px solid #6b7280;background:#111827;color:#f9fafb;cursor:pointer;padding:0;line-height:1;">?</button>
+            </label>
+            <div style="display:grid;gap:4px;padding-left:26px;">
+              <input id="fbgr-discord-webhook" type="text" aria-label="Discord Webhook URL" placeholder="Discord Webhook URL，例如：https://discord.com/api/webhooks/..." style="padding:6px;border-radius:6px;border:1px solid #6b7280;background:#111827;color:#f9fafb;" />
+            </div>
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-start;">
             <button id="fbgr-settings-test" style="padding:6px 10px;cursor:pointer;">測試通知</button>
@@ -7332,7 +7443,7 @@
     `;
   }
 
-  // 建立設定視窗，集中管理 refresh、load more、ntfy 與 Discord Webhook。
+  // 建立設定視窗，集中管理 refresh、load more 與通知通道。
   function createSettingsModal() {
     if (document.getElementById("fbgr-settings-modal")) return;
 
@@ -8766,6 +8877,9 @@
       buildRemoteNotificationLines,
       buildRemoteNotificationBody,
       buildNotificationPayload,
+      isNotificationChannelEnabled,
+      createNotificationChannelTask,
+      createNotificationChannelTasks,
       renderHighlightedHistoryContent,
       renderHistoryFieldRow,
       renderHistoryEntryHtml,
